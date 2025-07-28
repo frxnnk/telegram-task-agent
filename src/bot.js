@@ -1,305 +1,396 @@
 require('dotenv').config();
 const { Telegraf } = require('telegraf');
-const sqlite3 = require('sqlite3').verbose();
-const { TaskWorkflow } = require('./workflows/TaskWorkflow');
+const TaskAtomizerCLI = require('./atomizer/TaskAtomizerCLI');
+const DatabaseManager = require('./database/DatabaseManager');
+const path = require('path');
 
-class TaskBot {
+class TelegramTaskBot {
   constructor() {
     this.bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-    this.db = new sqlite3.Database('./data/tasks.db');
-    this.workflow = new TaskWorkflow(this.bot);
-    this.activeProjects = new Map(); // chatId -> projectState
+    this.atomizer = new TaskAtomizerCLI();
+    this.db = new DatabaseManager();
+    this.projects = new Map(); // En memoria para el MVP
     
-    this.initDatabase();
     this.setupCommands();
+    this.setupMiddleware();
   }
 
-  initDatabase() {
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS projects (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        chat_id INTEGER NOT NULL,
-        description TEXT NOT NULL,
-        status TEXT DEFAULT 'pending',
-        atomized_tasks TEXT,
-        total_cost REAL DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        started_at DATETIME,
-        completed_at DATETIME
-      )
-    `);
+  setupMiddleware() {
+    // Logging middleware
+    this.bot.use((ctx, next) => {
+      const user = ctx.from.username || ctx.from.first_name || 'unknown';
+      console.log(`📨 [${new Date().toISOString()}] ${user}: ${ctx.message?.text || ctx.update.callback_query?.data || 'action'}`);
+      return next();
+    });
+
+    // Error handling
+    this.bot.catch((err, ctx) => {
+      console.error('❌ Bot error:', err);
+      ctx.reply('❌ Ocurrió un error inesperado. Intenta nuevamente.');
+    });
   }
 
   setupCommands() {
     // Comando de inicio
-    this.bot.start((ctx) => {
-      ctx.reply(`
-🤖 *Task Agent v2.0 + LangGraph*
+    this.bot.command('start', (ctx) => {
+      const welcomeMessage = `
+🤖 **Telegram Task Agent** - ¡Bienvenido!
 
-Comandos disponibles:
-/project "descripción completa del proyecto" - Crear y atomizar proyecto
-/status - Ver estado del proyecto actual
-/start_execution - Iniciar ejecución de tareas atomizadas
-/pause - Pausar ejecución
-/resume - Reanudar ejecución
-/stop - Detener proyecto actual
-/progress - Ver progreso detallado
+Sistema de agentes atomizados que descompone proyectos complejos en tareas ejecutables.
 
-*Powered by LangGraph workflow orchestration* 🚀
-      `, { parse_mode: 'Markdown' });
+**Comandos disponibles:**
+/project - Atomizar un proyecto nuevo
+/list - Ver proyectos y tareas
+/status - Estado del sistema
+/help - Ayuda detallada
+
+**¿Cómo empezar?**
+1. Usa \`/project "Descripción de tu proyecto"\`
+2. Sigue las instrucciones para atomizar con Claude CLI
+3. Ejecuta las tareas resultantes
+
+💡 **Ejemplo:**
+\`/project "Crear una API REST para manejo de tareas con autenticación JWT"\`
+      `;
+      
+      ctx.replyWithMarkdown(welcomeMessage);
     });
 
-    // Crear nuevo proyecto
+    // Comando principal: atomizar proyecto
     this.bot.command('project', async (ctx) => {
-      const description = ctx.message.text.split(' ').slice(1).join(' ');
+      const projectDescription = ctx.message.text.replace('/project', '').trim();
       
-      if (!description) {
-        return ctx.reply('❌ Necesitas proporcionar una descripción del proyecto\n\nEjemplo: /project "Crear API REST con autenticación y CRUD de usuarios"');
+      if (!projectDescription) {
+        return ctx.replyWithMarkdown(`
+❌ **Descripción requerida**
+
+**Uso:** \`/project "descripción completa del proyecto"\`
+
+**Ejemplo:**
+\`/project "Desarrollar un sistema de chat en tiempo real con React, Node.js, Socket.io y MongoDB"\`
+        `);
       }
 
-      const chatId = ctx.chat.id;
-      
-      if (this.activeProjects.has(chatId)) {
-        return ctx.reply('⚠️ Ya tienes un proyecto activo. Usa /stop para terminarlo primero.');
+      await this.handleProjectAtomization(ctx, projectDescription);
+    });
+
+    // Listar proyectos y tareas
+    this.bot.command('list', (ctx) => {
+      if (this.projects.size === 0) {
+        return ctx.replyWithMarkdown(`
+📋 **No hay proyectos activos**
+
+Crea tu primer proyecto con:
+\`/project "descripción de tu proyecto"\`
+        `);
       }
 
-      await this.createProject(description, chatId, ctx);
+      this.sendProjectsList(ctx);
     });
 
-    // Iniciar ejecución
-    this.bot.command('start_execution', async (ctx) => {
-      const chatId = ctx.chat.id;
-      const project = this.activeProjects.get(chatId);
+    // Estado del sistema
+    this.bot.command('status', (ctx) => {
+      const status = this.getSystemStatus();
+      ctx.replyWithMarkdown(status);
+    });
+
+    // Ayuda detallada
+    this.bot.command('help', (ctx) => {
+      const helpMessage = `
+📚 **Telegram Task Agent - Guía Completa**
+
+**🎯 ¿Qué hace?**
+Descompone proyectos complejos en tareas atómicas ejecutables por Docker containers independientes.
+
+**🔧 Comandos principales:**
+
+**\`/project "descripción"\`**
+- Atomiza tu proyecto en tareas ejecutables
+- Integración con Claude CLI (gratis)
+- Genera prompt optimizado para atomización
+
+**\`/list\`**
+- Muestra todos los proyectos y sus tareas
+- Estados: pendiente, en progreso, completado
+- Dependencias y orden de ejecución
+
+**\`/status\`**
+- Estado general del sistema
+- Proyectos activos y estadísticas
+- Información de configuración
+
+**💡 Flujo de trabajo:**
+1. \`/project "Mi proyecto increíble"\` 
+2. Bot genera prompt para Claude CLI
+3. Ejecutas: \`claude --file="prompt.md"\`
+4. Pegas la respuesta JSON en el chat
+5. Bot procesa y muestra tareas listas para ejecutar
+
+**🚀 Ventajas:**
+✅ Costo $0 (usa tu suscripción Claude)
+✅ Tareas completamente independientes
+✅ Orden de ejecución automático
+✅ Comandos Docker específicos
+      `;
       
-      if (!project || project.status !== 'atomized') {
-        return ctx.reply('❌ No tienes un proyecto listo para ejecutar. Usa /project primero.');
-      }
-
-      await this.startExecution(chatId, ctx);
+      ctx.replyWithMarkdown(helpMessage);
     });
 
-    // Ver estado
-    this.bot.command('status', async (ctx) => {
-      await this.showStatus(ctx);
-    });
-
-    // Ver progreso detallado
-    this.bot.command('progress', async (ctx) => {
-      await this.showProgress(ctx);
-    });
-
-    // Pausar ejecución
-    this.bot.command('pause', async (ctx) => {
-      await this.pauseExecution(ctx);
-    });
-
-    // Reanudar ejecución
-    this.bot.command('resume', async (ctx) => {
-      await this.resumeExecution(ctx);
-    });
-
-    // Detener proyecto
-    this.bot.command('stop', async (ctx) => {
-      await this.stopProject(ctx);
+    // Comando para procesar respuesta de Claude CLI
+    this.bot.hears(/^\\{[\\s\\S]*\\}$/, async (ctx) => {
+      await this.handleClaudeResponse(ctx);
     });
   }
 
-  async createProject(description, chatId, ctx) {
+  async handleProjectAtomization(ctx, projectDescription) {
+    const userId = ctx.from.id;
+    const projectId = `proj_${Date.now()}_${userId}`;
+
     try {
-      ctx.reply('🔬 Atomizando proyecto con IA...');
-      
-      // Ejecutar workflow de LangGraph
-      const result = await this.workflow.executeWorkflow(description, chatId);
-      
-      // Guardar proyecto en base de datos
-      const projectId = await new Promise((resolve, reject) => {
-        this.db.run(
-          'INSERT INTO projects (chat_id, description, status, atomized_tasks) VALUES (?, ?, ?, ?)',
-          [chatId, description, 'atomized', JSON.stringify(result.atomizedTasks)],
-          function(err) {
-            if (err) reject(err);
-            else resolve(this.lastID);
-          }
-        );
+      // Enviar mensaje de procesamiento
+      const processingMsg = await ctx.replyWithMarkdown('⚙️ **Generando prompt para atomización...**');
+
+      // Generar prompt con TaskAtomizer CLI
+      const result = this.atomizer.generateAtomizationPrompt(projectDescription, {
+        maxTasks: 12,
+        complexity: 'medium'
       });
 
-      // Almacenar en memoria
-      this.activeProjects.set(chatId, {
+      // Guardar contexto del proyecto
+      this.projects.set(projectId, {
         id: projectId,
-        description,
-        status: 'atomized',
-        workflow: result
+        userId: userId,
+        description: projectDescription,
+        status: 'awaiting_claude_response',
+        promptFile: result.promptFile,
+        createdAt: new Date().toISOString()
       });
 
-    } catch (error) {
-      console.error('Error creando proyecto:', error);
-      ctx.reply('❌ Error atomizando proyecto: ' + error.message);
-    }
-  }
+      // Eliminar mensaje de procesamiento
+      await ctx.deleteMessage(processingMsg.message_id);
 
-  async startExecution(chatId, ctx) {
-    const project = this.activeProjects.get(chatId);
-    
-    try {
-      ctx.reply('🚀 Iniciando ejecución del proyecto...');
-      
-      // Continuar workflow desde donde se quedó
-      const config = { configurable: { thread_id: `project-${chatId}` } };
-      project.workflow.status = 'executing';
-      
-      await this.workflow.app.invoke(project.workflow, config);
-      
-      project.status = 'executing';
-      
-    } catch (error) {
-      console.error('Error iniciando ejecución:', error);
-      ctx.reply('❌ Error iniciando ejecución: ' + error.message);
-    }
-  }
+      // Enviar instrucciones con el prompt generado
+      const instructionsMessage = `
+🎯 **Proyecto listo para atomización**
 
-  async showStatus(ctx) {
-    const chatId = ctx.chat.id;
-    const project = this.activeProjects.get(chatId);
-    
-    if (!project) {
-      return ctx.reply('📭 No tienes proyectos activos\n\nUsa /project "descripción" para crear uno');
-    }
+**📋 Proyecto:** ${projectDescription.slice(0, 50)}${projectDescription.length > 50 ? '...' : ''}
+**📁 Prompt generado:** \`${path.basename(result.promptFile)}\`
 
-    const progress = project.workflow.getProgress();
-    
-    ctx.reply(`
-📊 *Estado del Proyecto*
+**🚀 SIGUIENTE PASO:**
 
-📝 ${project.description}
-🔄 Estado: ${project.status}
-📈 Progreso: ${progress.percentage}%
-✅ Completadas: ${progress.completed}
-🔥 Fallidas: ${progress.failed}
-⏳ Pendientes: ${progress.pending}
-💰 Costo: $${project.workflow.totalCost.toFixed(3)}
-    `, { parse_mode: 'Markdown' });
-  }
+1️⃣ **Ejecuta Claude CLI:**
+\`\`\`bash
+claude --file="${result.promptFile}"
+\`\`\`
 
-  async showProgress(ctx) {
-    const chatId = ctx.chat.id;
-    const project = this.activeProjects.get(chatId);
-    
-    if (!project) {
-      return ctx.reply('❌ No hay proyecto activo');
-    }
+2️⃣ **Copia la respuesta JSON completa** (solo el JSON, sin explicaciones)
 
-    const tasks = Object.values(project.workflow.executionGraph);
-    const statusEmoji = {
-      'pending': '⚪',
-      'running': '🔵',
-      'completed': '✅',
-      'failed': '❌',
-      'paused': '⏸️'
-    };
+3️⃣ **Pégala aquí en el chat** - El bot la procesará automáticamente
 
-    const taskList = tasks.slice(0, 8).map(task => 
-      `${statusEmoji[task.status]} ${task.title} (${task.estimated_tokens} tokens)`
-    ).join('\n');
+**💡 Alternativa:**
+\`\`\`bash
+claude < "${result.promptFile}"
+\`\`\`
 
-    ctx.reply(`
-📋 *Progreso Detallado*
+**⏱️ Timeout:** Este prompt expira en 30 minutos.
+      `;
 
-${taskList}
-${tasks.length > 8 ? `\n... y ${tasks.length - 8} tareas más` : ''}
+      await ctx.replyWithMarkdown(instructionsMessage);
 
-📊 Resumen:
-• Total: ${tasks.length} tareas
-• Completadas: ${project.workflow.completedTasks.length}
-• Activa: ${project.workflow.currentTask || 'ninguna'}
-    `, { parse_mode: 'Markdown' });
-  }
-
-  async pauseExecution(ctx) {
-    const chatId = ctx.chat.id;
-    const project = this.activeProjects.get(chatId);
-    
-    if (!project || project.status !== 'executing') {
-      return ctx.reply('❌ No hay ejecución activa para pausar');
-    }
-
-    try {
-      project.workflow.pauseExecution();
-      project.status = 'paused';
-      
-      ctx.reply('⏸️ Proyecto pausado exitosamente');
-    } catch (error) {
-      ctx.reply('❌ Error pausando proyecto: ' + error.message);
-    }
-  }
-
-  async resumeExecution(ctx) {
-    const chatId = ctx.chat.id;
-    const project = this.activeProjects.get(chatId);
-    
-    if (!project || project.status !== 'paused') {
-      return ctx.reply('❌ No hay proyecto pausado para reanudar');
-    }
-
-    try {
-      project.workflow.resumeExecution();
-      project.status = 'executing';
-      
-      // Continuar workflow
-      const config = { configurable: { thread_id: `project-${chatId}` } };
-      await this.workflow.app.invoke(project.workflow, config);
-      
-      ctx.reply('▶️ Proyecto reanudado exitosamente');
-    } catch (error) {
-      ctx.reply('❌ Error reanudando proyecto: ' + error.message);
-    }
-  }
-
-  async stopProject(ctx) {
-    const chatId = ctx.chat.id;
-    const project = this.activeProjects.get(chatId);
-    
-    if (!project) {
-      return ctx.reply('❌ No hay proyecto activo para detener');
-    }
-
-    try {
-      // Detener contenedores activos
-      const dockerContainers = Object.values(project.workflow.dockerContainers);
-      for (const containerId of dockerContainers) {
-        try {
-          const container = this.workflow.docker.getContainer(containerId);
-          await container.stop();
-          await container.remove();
-        } catch (error) {
-          console.log(`Container ${containerId} ya no existe`);
+      // Programar limpieza del prompt temporal
+      setTimeout(() => {
+        if (this.projects.has(projectId) && this.projects.get(projectId).status === 'awaiting_claude_response') {
+          this.projects.delete(projectId);
         }
+      }, 30 * 60 * 1000); // 30 minutos
+
+    } catch (error) {
+      console.error('Error in project atomization:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error al generar prompt**
+
+${error.message}
+
+Intenta nuevamente con una descripción más específica.
+      `);
+    }
+  }
+
+  async handleClaudeResponse(ctx) {
+    const userId = ctx.from.id;
+    const jsonResponse = ctx.message.text.trim();
+
+    // Buscar proyecto activo del usuario
+    const activeProject = Array.from(this.projects.values())
+      .find(p => p.userId === userId && p.status === 'awaiting_claude_response');
+
+    if (!activeProject) {
+      return ctx.replyWithMarkdown(`
+❌ **No hay proyecto activo esperando respuesta**
+
+Inicia un nuevo proyecto con:
+\`/project "descripción de tu proyecto"\`
+      `);
+    }
+
+    try {
+      // Mostrar mensaje de procesamiento
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Procesando respuesta de Claude...**');
+
+      // Parsear respuesta con TaskAtomizer
+      const result = this.atomizer.parseAtomizedResponse(jsonResponse);
+
+      // Actualizar proyecto con las tareas atomizadas
+      activeProject.status = 'atomized';
+      activeProject.atomizedResult = result;
+      activeProject.processedAt = new Date().toISOString();
+
+      // Eliminar mensaje de procesamiento
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      // Mostrar resumen del proyecto atomizado
+      await this.sendAtomizedProjectSummary(ctx, activeProject);
+
+    } catch (error) {
+      console.error('Error processing Claude response:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error al procesar respuesta de Claude**
+
+**Posibles causas:**
+- JSON inválido o incompleto
+- Formato de respuesta incorrecto
+- Respuesta cortada
+
+**💡 Asegúrate de:**
+- Copiar **todo** el JSON generado por Claude
+- Incluir desde \`{\` hasta \`}\`
+- No agregar texto adicional
+
+**Error detalle:** ${error.message}
+      `);
+    }
+  }
+
+  async sendAtomizedProjectSummary(ctx, project) {
+    const result = project.atomizedResult;
+    
+    const summaryMessage = `
+✅ **Proyecto atomizado exitosamente**
+
+**📋 ${result.project.title}**
+**🎯 Complejidad:** ${result.project.complexity}
+**⏱️ Duración estimada:** ${result.project.estimatedDuration}
+**🔧 Tech Stack:** ${result.project.techStack?.join(', ') || 'N/A'}
+
+**📊 Estadísticas:**
+• **Tareas generadas:** ${result.tasks.length}
+• **Dependencias:** ${result.dependencies.length}
+• **Costo:** ${result.costs.note}
+
+**🔗 Orden de ejecución calculado:**
+${result.executionOrder.map((task, i) => 
+  `${i + 1}. \`${task.id}\` - ${task.title}`
+).join('\\n')}
+
+**🚀 Próximos pasos:**
+• Usa \`/list\` para ver detalles de cada tarea
+• Implementar sistema de ejecución Docker
+• Monitoreo en tiempo real
+
+*Proyecto guardado como: ${project.id}*
+    `;
+
+    await ctx.replyWithMarkdown(summaryMessage);
+  }
+
+  sendProjectsList(ctx) {
+    const projects = Array.from(this.projects.values());
+    
+    let message = '📋 **Proyectos activos:**\\n\\n';
+    
+    projects.forEach(project => {
+      const status = this.getProjectStatusEmoji(project.status);
+      const title = project.atomizedResult ? 
+        project.atomizedResult.project.title : 
+        project.description.slice(0, 40) + '...';
+      
+      message += `${status} **${title}**\\n`;
+      message += `   ID: \`${project.id}\`\\n`;
+      message += `   Estado: ${project.status}\\n`;
+      
+      if (project.atomizedResult) {
+        message += `   Tareas: ${project.atomizedResult.tasks.length}\\n`;
       }
       
-      // Limpiar estado
-      this.activeProjects.delete(chatId);
-      
-      // Actualizar base de datos
-      this.db.run(
-        'UPDATE projects SET status = ?, completed_at = CURRENT_TIMESTAMP WHERE id = ?',
-        ['stopped', project.id]
-      );
-      
-      ctx.reply('🛑 Proyecto detenido y limpiado');
-    } catch (error) {
-      ctx.reply('❌ Error deteniendo proyecto: ' + error.message);
-    }
+      message += `\\n`;
+    });
+
+    ctx.replyWithMarkdown(message);
   }
 
-  start() {
-    console.log('🤖 Task Agent Bot iniciando...');
-    this.bot.launch();
+  getProjectStatusEmoji(status) {
+    const statusEmojis = {
+      'awaiting_claude_response': '⏳',
+      'atomized': '✅',
+      'executing': '🔄',
+      'completed': '🎉',
+      'failed': '❌'
+    };
+    return statusEmojis[status] || '❓';
+  }
+
+  getSystemStatus() {
+    const projectCount = this.projects.size;
+    const atomizedCount = Array.from(this.projects.values())
+      .filter(p => p.status === 'atomized').length;
     
-    // Cleanup al salir
-    process.once('SIGINT', () => this.bot.stop('SIGINT'));
-    process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+    return `
+🤖 **Estado del Sistema**
+
+**📊 Estadísticas:**
+• Proyectos activos: ${projectCount}
+• Proyectos atomizados: ${atomizedCount}
+• Sistema: Operativo ✅
+
+**⚙️ Configuración:**
+• TaskAtomizer: Claude CLI Ready
+• Database: ${this.db ? 'Conectado' : 'Desconectado'}
+• Bot Token: ${process.env.TELEGRAM_BOT_TOKEN ? 'Configurado' : 'Faltante'}
+
+**💾 Memoria:**
+• Proyectos en RAM: ${projectCount}
+• Uptime: ${Math.floor(process.uptime() / 60)} minutos
+
+*Versión: Telegram Task Agent MVP*
+    `;
+  }
+
+  async start() {
+    try {
+      // Inicializar base de datos
+      await this.db.initialize();
+      
+      // Iniciar bot
+      await this.bot.launch();
+      console.log('🤖 Telegram Task Agent iniciado correctamente');
+      console.log('🔑 Bot token configurado:', !!process.env.TELEGRAM_BOT_TOKEN);
+      console.log('📝 Comandos disponibles: /start, /project, /list, /status, /help');
+      
+      // Graceful shutdown
+      process.once('SIGINT', () => this.bot.stop('SIGINT'));
+      process.once('SIGTERM', () => this.bot.stop('SIGTERM'));
+      
+    } catch (error) {
+      console.error('❌ Error iniciando bot:', error);
+      process.exit(1);
+    }
   }
 }
 
-// Inicializar y arrancar el bot
-const bot = new TaskBot();
-bot.start();
+// Iniciar bot si se ejecuta directamente
+if (require.main === module) {
+  const bot = new TelegramTaskBot();
+  bot.start();
+}
+
+module.exports = TelegramTaskBot;
