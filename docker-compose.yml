@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  # Bot principal
+  telegram-bot:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./workspace:/workspace
+      - ./data:/app/data
+    depends_on:
+      - db
+    
+  # Base de datos SQLite simple
+  db:
+    image: alpine
+    volumes:
+      - ./data:/data
+    command: sh -c "touch /data/tasks.db && tail -f /dev/null"

@@ -1,0 +1,34 @@
+{
+  "name": "telegram-task-agent",
+  "version": "0.1.0",
+  "description": "MVP: Bot de Telegram que ejecuta 1 agente Docker por tarea",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "nodemon src/bot.js",
+    "test": "echo \"No tests yet\""
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^0.2.17",
+    "@langchain/core": "^0.2.31",
+    "@langchain/langgraph": "^0.0.34",
+    "dockerode": "^4.0.2",
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2",
+    "sqlite3": "^5.1.6",
+    "telegraf": "^4.15.7",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "docker",
+    "tasks",
+    "mvp"
+  ],
+  "author": "frxn",
+  "license": "MIT"
+}
