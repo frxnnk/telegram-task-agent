@@ -1,7 +1,7 @@
 {
   "name": "telegram-task-agent",
-  "version": "0.1.0",
-  "description": "MVP: Bot de Telegram que ejecuta 1 agente Docker por tarea",
+  "version": "1.0.0",
+  "description": "Sistema de agentes atomizados que descompone proyectos complejos en tareas ejecutables por Docker containers independientes",
   "main": "src/bot.js",
   "scripts": {
     "start": "node src/bot.js",
@@ -9,14 +9,12 @@
     "test": "echo \"No tests yet\""
   },
   "dependencies": {
-    "@langchain/anthropic": "^0.2.17",
-    "@langchain/core": "^0.2.31",
-    "@langchain/langgraph": "^0.0.34",
+    "@anthropic-ai/sdk": "^0.32.1",
     "dockerode": "^4.0.2",
-    "dotenv": "^16.3.1",
+    "dotenv": "^16.3.1", 
     "node-fetch": "^3.3.2",
-    "sqlite3": "^5.1.6",
-    "telegraf": "^4.15.7",
+    "sqlite3": "^5.1.7",
+    "telegraf": "^4.16.3",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
@@ -26,9 +24,21 @@
     "telegram",
     "bot",
     "docker",
-    "tasks",
-    "mvp"
+    "task-automation",
+    "claude-api",
+    "linear-integration"
   ],
-  "author": "frxn",
-  "license": "MIT"
+  "author": "frxnco@protonmail.com",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frxnnk/telegram-task-agent.git"
+  },
+  "bugs": {
+    "url": "https://github.com/frxnnk/telegram-task-agent/issues"
+  },
+  "homepage": "https://github.com/frxnnk/telegram-task-agent#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }
