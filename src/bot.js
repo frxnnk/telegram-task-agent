@@ -2,6 +2,8 @@ require('dotenv').config();
 const { Telegraf } = require('telegraf');
 const TaskAtomizerCLI = require('./atomizer/TaskAtomizerCLI');
 const DatabaseManager = require('./database/DatabaseManager');
+const LinearManager = require('./integrations/LinearManager');
+const GitHubManager = require('./integrations/GitHubManager');
 const path = require('path');
 
 class TelegramTaskBot {
@@ -9,7 +11,12 @@ class TelegramTaskBot {
     this.bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
     this.atomizer = new TaskAtomizerCLI();
     this.db = new DatabaseManager();
+    this.linear = new LinearManager(process.env.LINEAR_API_KEY);
+    this.github = new GitHubManager(process.env.GITHUB_TOKEN);
     this.projects = new Map(); // En memoria para el MVP
+    this.linearCache = new Map(); // Cache para equipos y proyectos
+    this.githubCache = new Map(); // Cache para repos y estructuras
+    this.selectedRepositories = new Map(); // Repos seleccionados por usuario
     
     this.setupCommands();
     this.setupMiddleware();
@@ -39,6 +46,19 @@ class TelegramTaskBot {
 Sistema de agentes atomizados que descompone proyectos complejos en tareas ejecutables.
 
 **Comandos disponibles:**
+
+**🔗 Integraciones:**
+/linear - Ver equipos y proyectos Linear
+/tasks [team_key] - Ver tareas de un equipo
+/project_tasks [project_name] - Ver tareas de proyecto
+/atomize [issue_id] - Atomizar tarea Linear específica
+
+/repos - Ver repositorios GitHub disponibles
+/select_repo [owner/repo] - Seleccionar repositorio
+/repo_structure [owner/repo] - Ver estructura del repo
+/my_repos - Ver repositorios seleccionados
+
+**⚙️ Core:**
 /project - Atomizar un proyecto nuevo
 /list - Ver proyectos y tareas
 /status - Estado del sistema
@@ -134,6 +154,40 @@ Descompone proyectos complejos en tareas atómicas ejecutables por Docker contai
       `;
       
       ctx.replyWithMarkdown(helpMessage);
+    });
+
+    // Comandos Linear Integration
+    this.bot.command('linear', async (ctx) => {
+      await this.handleLinearCommand(ctx);
+    });
+
+    this.bot.command('tasks', async (ctx) => {
+      await this.handleTasksCommand(ctx);
+    });
+
+    this.bot.command('project_tasks', async (ctx) => {
+      await this.handleProjectTasksCommand(ctx);
+    });
+
+    this.bot.command('atomize', async (ctx) => {
+      await this.handleAtomizeCommand(ctx);
+    });
+
+    // Comandos GitHub Integration
+    this.bot.command('repos', async (ctx) => {
+      await this.handleReposCommand(ctx);
+    });
+
+    this.bot.command('select_repo', async (ctx) => {
+      await this.handleSelectRepoCommand(ctx);
+    });
+
+    this.bot.command('repo_structure', async (ctx) => {
+      await this.handleRepoStructureCommand(ctx);
+    });
+
+    this.bot.command('my_repos', async (ctx) => {
+      await this.handleMyReposCommand(ctx);
     });
 
     // Comando para procesar respuesta de Claude CLI
@@ -363,6 +417,400 @@ ${result.executionOrder.map((task, i) =>
 
 *Versión: Telegram Task Agent MVP*
     `;
+  }
+
+  // Handlers para comandos Linear
+  async handleLinearCommand(ctx) {
+    try {
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Cargando datos de Linear...**');
+
+      // Obtener equipos y proyectos en paralelo
+      const [teams, projects] = await Promise.all([
+        this.linear.getTeams(),
+        this.linear.getProjects()
+      ]);
+
+      // Cache para uso posterior
+      this.linearCache.set('teams', teams);
+      this.linearCache.set('projects', projects);
+
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      // Mostrar equipos disponibles
+      const teamsMessage = this.linear.formatTeamsForTelegram(teams);
+      await ctx.replyWithMarkdown(teamsMessage);
+
+      // Mostrar proyectos disponibles
+      const projectsMessage = this.linear.formatProjectsForTelegram(projects);
+      await ctx.replyWithMarkdown(projectsMessage);
+
+    } catch (error) {
+      console.error('Error in Linear command:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error conectando con Linear**
+
+${error.message}
+
+Verifica tu LINEAR_API_KEY en las variables de entorno.
+      `);
+    }
+  }
+
+  async handleTasksCommand(ctx) {
+    const teamKey = ctx.message.text.replace('/tasks', '').trim();
+    
+    if (!teamKey) {
+      return ctx.replyWithMarkdown(`
+❌ **Team key requerido**
+
+**Uso:** \`/tasks [team_key]\`
+
+**Ejemplo:** \`/tasks DEV\`
+
+Usa \`/linear\` para ver equipos disponibles.
+      `);
+    }
+
+    try {
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Cargando tareas del equipo...**');
+
+      // Buscar equipo por key
+      const teams = this.linearCache.get('teams') || await this.linear.getTeams();
+      const team = teams.find(t => t.key.toLowerCase() === teamKey.toLowerCase());
+
+      if (!team) {
+        await ctx.deleteMessage(processingMsg.message_id);
+        return ctx.replyWithMarkdown(`
+❌ **Equipo no encontrado: ${teamKey}**
+
+Equipos disponibles:
+${teams.map(t => `• \`${t.key}\` - ${t.name}`).join('\n')}
+        `);
+      }
+
+      // Obtener tareas del equipo
+      const teamWithIssues = await this.linear.getIssuesByTeam(team.id);
+      
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      const issuesMessage = this.linear.formatIssuesForTelegram(
+        teamWithIssues.issues.nodes, 
+        `${team.name} (${team.key})`
+      );
+      
+      await ctx.replyWithMarkdown(issuesMessage);
+
+    } catch (error) {
+      console.error('Error getting team tasks:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error obteniendo tareas del equipo**
+
+${error.message}
+      `);
+    }
+  }
+
+  async handleProjectTasksCommand(ctx) {
+    const projectName = ctx.message.text.replace('/project_tasks', '').trim();
+    
+    if (!projectName) {
+      return ctx.replyWithMarkdown(`
+❌ **Nombre de proyecto requerido**
+
+**Uso:** \`/project_tasks [project_name]\`
+
+**Ejemplo:** \`/project_tasks "API Development"\`
+
+Usa \`/linear\` para ver proyectos disponibles.
+      `);
+    }
+
+    try {
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Cargando tareas del proyecto...**');
+
+      // Buscar proyecto por nombre
+      const projects = this.linearCache.get('projects') || await this.linear.getProjects();
+      const project = projects.find(p => 
+        p.name.toLowerCase().includes(projectName.toLowerCase())
+      );
+
+      if (!project) {
+        await ctx.deleteMessage(processingMsg.message_id);
+        return ctx.replyWithMarkdown(`
+❌ **Proyecto no encontrado: ${projectName}**
+
+Proyectos disponibles:
+${projects.slice(0, 5).map(p => `• ${p.name}`).join('\n')}
+        `);
+      }
+
+      // Obtener tareas del proyecto
+      const projectWithIssues = await this.linear.getIssuesByProject(project.id);
+      
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      const issuesMessage = this.linear.formatIssuesForTelegram(
+        projectWithIssues.issues.nodes, 
+        project.name
+      );
+      
+      await ctx.replyWithMarkdown(issuesMessage);
+
+    } catch (error) {
+      console.error('Error getting project tasks:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error obteniendo tareas del proyecto**
+
+${error.message}
+      `);
+    }
+  }
+
+  async handleAtomizeCommand(ctx) {
+    const issueId = ctx.message.text.replace('/atomize', '').trim();
+    
+    if (!issueId) {
+      return ctx.replyWithMarkdown(`
+❌ **Issue ID requerido**
+
+**Uso:** \`/atomize [issue_id]\`
+
+**Ejemplo:** \`/atomize 123e4567-e89b-12d3-a456-426614174000\`
+
+Usa \`/tasks [team]\` para ver IDs de tareas disponibles.
+      `);
+    }
+
+    try {
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Obteniendo tarea de Linear...**');
+
+      // Obtener detalles completos de la tarea
+      const issue = await this.linear.getIssueById(issueId);
+      
+      if (!issue) {
+        await ctx.deleteMessage(processingMsg.message_id);
+        return ctx.replyWithMarkdown(`
+❌ **Tarea no encontrada: ${issueId}**
+
+Verifica que el ID sea correcto y tengas acceso a la tarea.
+        `);
+      }
+
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      // Mostrar detalles de la tarea antes de atomizar
+      const taskDetails = `
+🎯 **Tarea Linear Seleccionada**
+
+**${issue.identifier}**: ${issue.title}
+**Equipo:** ${issue.team.name} (${issue.team.key})
+**Estado:** ${issue.state.name}
+**Prioridad:** ${this.linear.getPriorityEmoji(issue.priority)}
+**Asignado:** ${issue.assignee ? issue.assignee.name : 'Sin asignar'}
+
+**Descripción:**
+${issue.description || 'Sin descripción'}
+
+**¿Quieres atomizar esta tarea?**
+Responde \`/confirm_atomize ${issueId}\` para continuar.
+      `;
+
+      await ctx.replyWithMarkdown(taskDetails);
+
+    } catch (error) {
+      console.error('Error getting issue details:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error obteniendo detalles de la tarea**
+
+${error.message}
+      `);
+    }
+  }
+
+  // GitHub Integration Handlers
+  async handleReposCommand(ctx) {
+    try {
+      if (!process.env.GITHUB_TOKEN) {
+        return ctx.replyWithMarkdown(`
+❌ **GitHub Token no configurado**
+
+Configura GITHUB_TOKEN en tu archivo .env para usar esta funcionalidad.
+        `);
+      }
+
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Cargando repositorios GitHub...**');
+
+      // Obtener repositorios accesibles
+      const repositories = await this.github.getRepositories('all', 'updated', 50);
+
+      // Cache para uso posterior
+      this.githubCache.set('repositories', repositories);
+
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      // Mostrar repositorios disponibles
+      const reposMessage = this.github.formatRepositoriesForTelegram(repositories);
+      await ctx.replyWithMarkdown(reposMessage);
+
+    } catch (error) {
+      console.error('Error in repos command:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error obteniendo repositorios**
+
+${error.message}
+
+Verifica tu token de GitHub y permisos.
+      `);
+    }
+  }
+
+  async handleSelectRepoCommand(ctx) {
+    const repoPath = ctx.message.text.replace('/select_repo', '').trim();
+    
+    if (!repoPath || !repoPath.includes('/')) {
+      return ctx.replyWithMarkdown(`
+❌ **Formato de repositorio inválido**
+
+**Uso:** \`/select_repo owner/repository\`
+**Ejemplo:** \`/select_repo facebook/react\`
+
+Usa \`/repos\` para ver repositorios disponibles.
+      `);
+    }
+
+    try {
+      const [owner, repo] = repoPath.split('/');
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Validando acceso al repositorio...**');
+
+      // Validar acceso al repositorio
+      const validation = await this.github.validateRepositoryAccess(owner, repo);
+
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      if (!validation.valid) {
+        return ctx.replyWithMarkdown(`
+❌ **Error de acceso al repositorio**
+
+${validation.error}
+
+Verifica que tengas permisos de escritura en este repositorio.
+        `);
+      }
+
+      // Guardar repositorio seleccionado para el usuario
+      const userId = ctx.from.id;
+      if (!this.selectedRepositories.has(userId)) {
+        this.selectedRepositories.set(userId, []);
+      }
+
+      const userRepos = this.selectedRepositories.get(userId);
+      const existingRepo = userRepos.find(r => r.full_name === validation.repository.full_name);
+
+      if (existingRepo) {
+        return ctx.replyWithMarkdown(`
+✅ **Repositorio ya seleccionado**
+
+**${validation.repository.full_name}** ya está en tu lista de repositorios.
+
+Usa \`/my_repos\` para ver todos tus repositorios seleccionados.
+        `);
+      }
+
+      userRepos.push({
+        ...validation.repository,
+        selectedAt: new Date().toISOString()
+      });
+
+      const successMessage = `
+✅ **Repositorio seleccionado exitosamente**
+
+**📁 ${validation.repository.full_name}**
+${validation.repository.description ? `📝 ${validation.repository.description}` : ''}
+
+**Permisos:** ${validation.repository.permissions.admin ? '👑 Admin' : '✍️ Write'}
+**Branch principal:** \`${validation.repository.default_branch}\`
+
+**Siguiente paso:**
+- \`/repo_structure ${validation.repository.full_name}\` - Ver estructura
+- \`/my_repos\` - Ver todos tus repositorios
+      `;
+
+      await ctx.replyWithMarkdown(successMessage);
+
+    } catch (error) {
+      console.error('Error selecting repository:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error seleccionando repositorio**
+
+${error.message}
+      `);
+    }
+  }
+
+  async handleRepoStructureCommand(ctx) {
+    const repoPath = ctx.message.text.replace('/repo_structure', '').trim();
+    
+    if (!repoPath || !repoPath.includes('/')) {
+      return ctx.replyWithMarkdown(`
+❌ **Formato de repositorio inválido**
+
+**Uso:** \`/repo_structure owner/repository\`
+**Ejemplo:** \`/repo_structure facebook/react\`
+      `);
+    }
+
+    try {
+      const [owner, repo] = repoPath.split('/');
+      const processingMsg = await ctx.replyWithMarkdown('🔄 **Obteniendo estructura del repositorio...**');
+
+      // Obtener estructura del repositorio
+      const structure = await this.github.getRepositoryStructure(owner, repo, '', 3);
+
+      await ctx.deleteMessage(processingMsg.message_id);
+
+      // Formatear y mostrar estructura
+      const structureMessage = this.github.formatRepositoryStructureForTelegram(structure, repoPath);
+      await ctx.replyWithMarkdown(structureMessage);
+
+    } catch (error) {
+      console.error('Error getting repository structure:', error);
+      await ctx.replyWithMarkdown(`
+❌ **Error obteniendo estructura**
+
+${error.message}
+
+Verifica que tengas acceso a este repositorio.
+      `);
+    }
+  }
+
+  async handleMyReposCommand(ctx) {
+    const userId = ctx.from.id;
+    const userRepos = this.selectedRepositories.get(userId) || [];
+
+    if (userRepos.length === 0) {
+      return ctx.replyWithMarkdown(`
+📂 **No tienes repositorios seleccionados**
+
+Usa \`/repos\` para ver repositorios disponibles y \`/select_repo [owner/repo]\` para seleccionar.
+      `);
+    }
+
+    let message = '📁 **Tus repositorios seleccionados:**\n\n';
+
+    userRepos.forEach((repo, index) => {
+      const selectedDate = new Date(repo.selectedAt).toLocaleDateString();
+      const visibility = repo.private ? '🔒 Privado' : '🌐 Público';
+      
+      message += `${index + 1}. **${repo.name}**\n`;
+      message += `   ${visibility} • \`${repo.full_name}\`\n`;
+      message += `   📅 Seleccionado: ${selectedDate}\n`;
+      message += `   🔗 \`/repo_structure ${repo.full_name}\`\n\n`;
+    });
+
+    message += '*Estos repositorios serán considerados para la atomización de tareas.*';
+
+    await ctx.replyWithMarkdown(message);
   }
 
   async start() {
