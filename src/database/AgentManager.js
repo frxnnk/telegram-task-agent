@@ -28,6 +28,8 @@ class AgentManager {
   }
 
   async createTables() {
+    // Check if we need to migrate existing tables
+    await this.migrateTablesIfNeeded();
     const createAgentsTable = `
       CREATE TABLE IF NOT EXISTS agents (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +62,7 @@ class AgentManager {
         started_at DATETIME NULL,
         completed_at DATETIME NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (agent_id) REFERENCES agents (id)
       )
     `;
@@ -73,6 +76,43 @@ class AgentManager {
         this.db.run(createTaskExecutionsTable, (err) => {
           if (err) reject(err);
           else resolve();
+        });
+      });
+    });
+  }
+
+  async migrateTablesIfNeeded() {
+    return new Promise((resolve, reject) => {
+      // Check if updated_at column exists in task_executions
+      this.db.get("PRAGMA table_info(task_executions)", (err, result) => {
+        if (err) {
+          // Table doesn't exist yet, no migration needed
+          resolve();
+          return;
+        }
+        
+        // Check if updated_at column exists
+        this.db.all("PRAGMA table_info(task_executions)", (err, columns) => {
+          if (err) {
+            resolve();
+            return;
+          }
+          
+          const hasUpdatedAt = columns.some(col => col.name === 'updated_at');
+          
+          if (!hasUpdatedAt) {
+            console.log('🔄 Migrating task_executions table to add updated_at column...');
+            this.db.run("ALTER TABLE task_executions ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP", (err) => {
+              if (err) {
+                console.warn('Migration warning:', err.message);
+              } else {
+                console.log('✅ Migration completed');
+              }
+              resolve();
+            });
+          } else {
+            resolve();
+          }
         });
       });
     });
@@ -201,6 +241,66 @@ class AgentManager {
       });
       
       stmt.finalize();
+    });
+  }
+
+  // Actualizar ejecución de tarea
+  async updateTaskExecution(executionId, status, progress = null, logs = null, dockerInstanceId = null) {
+    return new Promise((resolve, reject) => {
+      let query = 'UPDATE task_executions SET status = ?, updated_at = CURRENT_TIMESTAMP';
+      let params = [status];
+      
+      if (progress !== null) {
+        query += ', progress = ?';
+        params.push(progress);
+      }
+      
+      if (logs !== null) {
+        query += ', logs = ?';
+        params.push(typeof logs === 'string' ? logs : JSON.stringify(logs));
+      }
+      
+      if (dockerInstanceId !== null) {
+        query += ', docker_instance_id = ?';
+        params.push(dockerInstanceId);
+      }
+      
+      if (status === 'running') {
+        query += ', started_at = COALESCE(started_at, CURRENT_TIMESTAMP)';
+      }
+      
+      if (status === 'completed' || status === 'failed') {
+        query += ', completed_at = CURRENT_TIMESTAMP';
+      }
+      
+      query += ' WHERE id = ?';
+      params.push(executionId);
+      
+      const stmt = this.db.prepare(query);
+      
+      stmt.run(params, function(err) {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(this.changes > 0);
+        }
+      });
+      
+      stmt.finalize();
+    });
+  }
+
+  // Helper para verificar si ya tiene started_at
+  hasStartTime(executionId) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        'SELECT started_at FROM task_executions WHERE id = ?',
+        [executionId],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row && row.started_at !== null);
+        }
+      );
     });
   }
 

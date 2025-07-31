@@ -83,7 +83,10 @@ ${enhancedContext}
       
       // Execute Claude CLI with --print for non-interactive output
       // Using echo to pipe the prompt to claude
-      const claudeCommand = `echo ${JSON.stringify(fullPrompt)} | claude --print --permission-mode bypassPermissions`;
+      const isRoot = process.getuid && process.getuid() === 0;
+      const permissionFlag = isRoot ? '' : '--permission-mode bypassPermissions';
+      const claudeCommand = `echo ${JSON.stringify(fullPrompt)} | claude --print ${permissionFlag}`;
+      
       const { stdout, stderr } = await execAsync(claudeCommand, {
         shell: true,
         timeout: 120000, // 2 minutes timeout
@@ -507,7 +510,26 @@ IMPORTANTE:
   parseAtomizedResponse(content) {
     try {
       // Limpiar el contenido y extraer solo el JSON
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      // Manejar tanto respuestas con ```json como respuestas directas
+      let cleanContent = content.trim();
+      
+      // Si viene con markdown code blocks, extraer el contenido
+      if (cleanContent.startsWith('```json')) {
+        const start = cleanContent.indexOf('```json') + 7;
+        const end = cleanContent.lastIndexOf('```');
+        if (end > start) {
+          cleanContent = cleanContent.substring(start, end).trim();
+        }
+      } else if (cleanContent.startsWith('```')) {
+        const start = cleanContent.indexOf('```') + 3;
+        const end = cleanContent.lastIndexOf('```');
+        if (end > start) {
+          cleanContent = cleanContent.substring(start, end).trim();
+        }
+      }
+      
+      // Buscar el JSON dentro del contenido limpio
+      const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
       if (!jsonMatch) {
         throw new Error('No valid JSON found in response');
       }
@@ -860,6 +882,35 @@ Devuelve 2-4 subtareas más específicas que mantengan la misma funcionalidad.`;
       return this.parseAtomizedResponse(stdout);
     } catch (error) {
       throw new Error(`Re-atomization failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * API fallback for VPS where CLI auth is problematic
+   */
+  async executeViaAPI(prompt) {
+    const Anthropic = require('@anthropic-ai/sdk');
+    
+    const anthropic = new Anthropic({
+      apiKey: process.env.CLAUDE_API_KEY
+    });
+
+    try {
+      const response = await anthropic.messages.create({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 4096,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ]
+      });
+
+      return response.content[0].text;
+      
+    } catch (error) {
+      throw new Error(`Claude API failed: ${error.message}`);
     }
   }
 }

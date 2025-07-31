@@ -1,0 +1,49 @@
+# Dockerfile para Agentes Background con Claude CLI
+FROM ubuntu:22.04
+
+# Evitar prompts interactivos durante instalación
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Instalar dependencias básicas
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    nodejs \
+    npm \
+    python3 \
+    python3-pip \
+    vim \
+    nano \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
+
+# Instalar Claude CLI
+RUN curl -sSL https://claude.ai/cli/install.sh | bash
+
+# Configurar PATH para Claude CLI  
+ENV PATH="/root/.local/bin:$PATH"
+
+# Crear directorios de trabajo
+RUN mkdir -p /workspace /logs
+RUN chmod 755 /workspace /logs
+
+# Verificar instalación de Claude CLI
+RUN claude --version || echo "Claude CLI instalado pero requiere autenticación"
+
+# Script de entrada para verificar autenticación
+RUN echo '#!/bin/bash\n\
+echo "🤖 Agente Background iniciado"\n\
+echo "📂 Workspace: $(pwd)"\n\
+echo "🔐 Verificando Claude CLI..."\n\
+claude auth status || echo "⚠️  Claude CLI requiere autenticación (se montará desde host)"\n\
+echo "✅ Agente listo para ejecutar tareas"\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Punto de entrada por defecto
+WORKDIR /workspace
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Comando por defecto (se puede sobrescribir)
+CMD ["bash"]

@@ -312,17 +312,42 @@ class LinearManager {
     return message;
   }
 
-  formatIssuesForTelegram(issues, teamOrProject) {
+  formatIssuesForTelegram(issues, teamOrProject, includeCompleted = false) {
     if (!issues || issues.length === 0) {
       return `📋 No hay tareas en ${teamOrProject}`;
     }
 
+    // Filter tasks based on state (exclude completed/canceled unless explicitly requested)
+    const filteredIssues = includeCompleted 
+      ? issues 
+      : issues.filter(issue => 
+          issue.state.type !== 'completed' && 
+          issue.state.type !== 'canceled'
+        );
+
+    if (filteredIssues.length === 0) {
+      return `📋 Todas las tareas están completadas en ${teamOrProject}`;
+    }
+
+    // Sort tasks: suggested first, then by priority and state
+    const sortedIssues = this.sortTasksByPriority(filteredIssues);
+    const suggestedTask = this.getSuggestedTask(sortedIssues);
+
     let message = `📋 **Tareas de ${teamOrProject}:**\n\n`;
     
-    issues.slice(0, 10).forEach((issue, index) => {
+    // Add suggested task indicator
+    if (suggestedTask) {
+      message += `💡 **SUGERIDA:** ${this.getStateEmoji(suggestedTask.state.type)}${this.getPriorityEmoji(suggestedTask.priority)} **${suggestedTask.identifier}**\n`;
+      message += `   📝 ${suggestedTask.title}\n`;
+      message += `   🎯 *Esta tarea debería hacerse primero*\n\n`;
+      message += `──────────────────────\n\n`;
+    }
+    
+    sortedIssues.slice(0, 10).forEach((issue, index) => {
       const stateEmoji = this.getStateEmoji(issue.state.type);
       const priorityEmoji = this.getPriorityEmoji(issue.priority);
       const assigneeText = issue.assignee ? `👤 ${issue.assignee.name}` : '👤 Sin asignar';
+      const isSuggested = suggestedTask && issue.id === suggestedTask.id;
       
       // Remove RELY prefix for telegram project tasks
       let displayTitle = issue.title;
@@ -333,7 +358,9 @@ class LinearManager {
         displayIdentifier = displayIdentifier.replace(/^RELY-/, 'TELEGRAM-');
       }
       
-      message += `${index + 1}. ${stateEmoji}${priorityEmoji} **${displayIdentifier}**: ${displayTitle}\n`;
+      const suggestionIndicator = isSuggested ? '💡 ' : '';
+      
+      message += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${displayIdentifier}**: ${displayTitle}\n`;
       message += `   ${assigneeText} • Estado: ${issue.state.name}\n`;
       
       if (issue.estimate) {
@@ -347,8 +374,13 @@ class LinearManager {
       message += `   🔗 \`/atomize ${issue.id}\`\n\n`;
     });
 
-    if (issues.length > 10) {
-      message += `*... y ${issues.length - 10} tareas más*\n\n`;
+    if (sortedIssues.length > 10) {
+      message += `*... y ${sortedIssues.length - 10} tareas más*\n\n`;
+    }
+
+    const completedCount = issues.length - filteredIssues.length;
+    if (completedCount > 0) {
+      message += `✅ ${completedCount} tareas completadas (usa /all_tasks para verlas)\n\n`;
     }
 
     message += '*Usa /atomize [issue_id] para atomizar una tarea específica*';
@@ -726,6 +758,72 @@ class LinearManager {
       team: telTeam,
       issues: teamData.issues.nodes
     };
+  }
+
+  // Sort tasks by priority and suggested order
+  sortTasksByPriority(issues) {
+    return issues.sort((a, b) => {
+      // Priority order: urgent (0), high (1), medium (2), low (3), no priority (4)
+      const priorityA = a.priority !== null ? a.priority : 4;
+      const priorityB = b.priority !== null ? b.priority : 4;
+      
+      // State priority: started > unstarted > backlog > triage > planned
+      const stateOrder = {
+        'started': 0,
+        'unstarted': 1, 
+        'backlog': 2,
+        'triage': 3,
+        'planned': 4
+      };
+      
+      const stateA = stateOrder[a.state.type] || 5;
+      const stateB = stateOrder[b.state.type] || 5;
+      
+      // Special case: always put started tasks first regardless of priority
+      if (a.state.type === 'started' && b.state.type !== 'started') {
+        return -1;
+      }
+      if (b.state.type === 'started' && a.state.type !== 'started') {
+        return 1;
+      }
+      
+      // For non-started tasks, sort by priority first
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      
+      // Then by state
+      if (stateA !== stateB) {
+        return stateA - stateB;
+      }
+      
+      // Finally by creation date (older first)
+      return new Date(a.createdAt) - new Date(b.createdAt);
+    });
+  }
+
+  // Get suggested task to work on next
+  getSuggestedTask(sortedIssues) {
+    if (!sortedIssues || sortedIssues.length === 0) {
+      return null;
+    }
+    
+    // Look for started tasks first (highest priority)
+    const startedTask = sortedIssues.find(issue => issue.state.type === 'started');
+    if (startedTask) {
+      return startedTask;
+    }
+    
+    // Then look for urgent unstarted tasks
+    const urgentTask = sortedIssues.find(issue => 
+      issue.state.type === 'unstarted' && issue.priority === 0
+    );
+    if (urgentTask) {
+      return urgentTask;
+    }
+    
+    // Finally, return the first task in the sorted list
+    return sortedIssues[0];
   }
 
   // Update multiple task states based on real implementation status

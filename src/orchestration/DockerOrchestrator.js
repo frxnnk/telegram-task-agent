@@ -13,6 +13,7 @@ class DockerOrchestrator {
     this.instances = new Map();
     this.logs = new Map();
     this.projectRepoManager = options.projectRepoManager;
+    this.mockMode = options.mockMode || false;
   }
 
   async playTask(atomicTaskId, taskData, options = {}) {
@@ -29,10 +30,14 @@ class DockerOrchestrator {
       
       await this.prepareTaskEnvironment(taskDir, taskData);
       
-      const dockerCommand = this.buildDockerCommand(containerName, taskDir, taskData, options);
-      
       console.log(`🚀 Starting container: ${containerName}`);
       console.log(`📁 Workspace: ${taskDir}`);
+      
+      if (this.mockMode) {
+        return this.playTaskMock(instanceId, containerName, atomicTaskId, taskData, taskDir);
+      }
+      
+      const dockerCommand = this.buildDockerCommand(containerName, taskDir, taskData, options);
       
       const process = spawn('docker', dockerCommand.split(' ').slice(1), {
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -62,9 +67,51 @@ class DockerOrchestrator {
       };
 
     } catch (error) {
-      console.error('❌ Error starting task:', error);
+      console.log('❌ Error starting task:', error);
       throw error;
     }
+  }
+
+  playTaskMock(instanceId, containerName, atomicTaskId, taskData, taskDir) {
+    console.log('🧪 Running in MOCK mode (Docker not available)');
+    
+    const instance = {
+      id: instanceId,
+      containerName,
+      atomicTaskId,
+      taskData,
+      process: null,
+      startTime: new Date(),
+      status: 'running',
+      logs: [
+        { timestamp: new Date().toISOString(), type: 'stdout', data: 'Mock execution started' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: `Task: ${taskData.title}` },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: `Description: ${taskData.description}` }
+      ]
+    };
+
+    this.instances.set(instanceId, instance);
+    
+    // Simulate task completion after 30 seconds
+    setTimeout(() => {
+      if (this.instances.has(instanceId)) {
+        instance.status = 'completed';
+        instance.endTime = new Date();
+        instance.logs.push({
+          timestamp: new Date().toISOString(),
+          type: 'stdout',
+          data: 'Mock task completed successfully'
+        });
+        console.log(`✅ Mock task ${instanceId} completed`);
+      }
+    }, 30000);
+
+    return {
+      instanceId,
+      containerName,
+      status: 'started',
+      workspace: taskDir
+    };
   }
 
   async getInstances() {
@@ -423,6 +470,299 @@ executeTask();
       maxInstances: this.maxInstances,
       availability: `${running}/${this.maxInstances}`
     };
+  }
+
+  // ========================================
+  // NUEVOS MÉTODOS PARA AGENTES CON CLAUDE CLI
+  // ========================================
+  
+  /**
+   * Ejecuta una tarea de agente usando Claude CLI
+   * @param {number} agentId - ID del agente
+   * @param {string} taskId - ID de la tarea Linear
+   * @param {Object} taskData - Datos de la tarea
+   * @param {string} mode - 'background' o 'interactive'
+   */
+  async executeAgentTask(agentId, taskId, taskData, mode = 'background') {
+    try {
+      if (this.instances.size >= this.maxInstances) {
+        throw new Error(`Maximum instances limit reached (${this.maxInstances})`);
+      }
+
+      const instanceId = `agent_${agentId}_task_${taskId}_${Date.now()}`;
+      
+      if (mode === 'background') {
+        return await this.createIsolatedAgentContainer(instanceId, agentId, taskId, taskData);
+      } else if (mode === 'interactive') {
+        return await this.useSharedAgentContainer(instanceId, agentId, taskId, taskData);
+      } else {
+        throw new Error(`Invalid execution mode: ${mode}`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Error executing agent task:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Crear container aislado para tarea background
+   */
+  async createIsolatedAgentContainer(instanceId, agentId, taskId, taskData) {
+    const containerName = `agent-${agentId}-task-${taskId}`;
+    const taskDir = path.join(this.workspacePath, instanceId);
+    
+    await this.ensureDirectory(taskDir);
+    await this.prepareAgentEnvironment(taskDir, taskData);
+    
+    console.log(`🤖 Starting isolated agent container: ${containerName}`);
+    console.log(`📁 Workspace: ${taskDir}`);
+    
+    if (this.mockMode) {
+      return this.executeAgentTaskMock(instanceId, containerName, agentId, taskId, taskData, taskDir);
+    }
+    
+    // Comando Docker con volumen de autenticación Claude CLI
+    const dockerCommand = [
+      'docker', 'run',
+      '--name', containerName,
+      '--rm',
+      '-d',
+      // Montar autenticación Claude CLI (solo lectura)
+      '-v', '/root/.claude:/root/.claude:ro',
+      // Montar workspace
+      '-v', `${taskDir}:/workspace`,
+      '-w', '/workspace',
+      // Límites de recursos
+      '--memory=1g',
+      '--cpus=2',
+      // Red para clonar repos
+      '--network=bridge',
+      // Imagen de agente
+      'claude-agent:latest',
+      // Comando por defecto (se puede personalizar)
+      'bash', '-c', this.buildAgentCommand(taskData)
+    ];
+    
+    const process = spawn(dockerCommand[0], dockerCommand.slice(1), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: taskDir
+    });
+
+    const instance = {
+      id: instanceId,
+      containerName,
+      agentId,
+      taskId,
+      taskData,
+      mode: 'background',
+      process,
+      status: 'running',
+      startTime: new Date(),
+      logs: [],
+      type: 'agent'
+    };
+
+    this.instances.set(instanceId, instance);
+    this.setupLogCapture(instance);
+    this.setupProcessHandlers(instance);
+
+    console.log(`✅ Agent container ${containerName} started in background mode`);
+    
+    return {
+      instanceId,
+      containerName,
+      agentId,
+      taskId,
+      mode: 'background',
+      status: 'running',
+      message: 'Agent task started in isolated container'
+    };
+  }
+
+  /**
+   * Usar container compartido para tarea interactiva
+   */
+  async useSharedAgentContainer(instanceId, agentId, taskId, taskData) {
+    const sharedContainerName = `shared-agent-${agentId}`;
+    
+    // Verificar si ya existe un container compartido para este agente
+    const existingContainer = await this.findSharedContainer(agentId);
+    
+    if (existingContainer) {
+      console.log(`🔄 Using existing shared container: ${sharedContainerName}`);
+      return await this.executeInSharedContainer(existingContainer, instanceId, taskId, taskData);
+    }
+    
+    // Crear nuevo container compartido
+    console.log(`🆕 Creating new shared container: ${sharedContainerName}`);
+    return await this.createSharedAgentContainer(instanceId, agentId, taskId, taskData);
+  }
+
+  /**
+   * Construir comando específico para agente con Claude CLI
+   */
+  buildAgentCommand(taskData) {
+    const baseCommand = [
+      'echo "🤖 Starting agent execution..."',
+      'echo "📋 Task: ' + (taskData.title || 'Untitled') + '"',
+      'echo "🔐 Verifying Claude CLI authentication..."',
+      'claude auth status',
+      'echo "✅ Claude CLI ready"',
+      'echo "📂 Available repositories:"',
+      'ls -la repositories/ 2>/dev/null || echo "No repositories cloned"',
+    ];
+
+    // Si hay contexto específico de Claude, agregarlo
+    if (taskData.claudePrompt) {
+      baseCommand.push(`echo "${taskData.claudePrompt}" | claude --print`);
+    } else {
+      // Comando por defecto: analizar el contexto y generar plan
+      baseCommand.push(
+        'echo "Analyze the Linear task and repository context to create an execution plan" | claude --print',
+        'echo "🎯 Task analysis complete"'
+      );
+    }
+
+    baseCommand.push('echo "✅ Agent execution completed"');
+    
+    return baseCommand.join(' && ');
+  }
+
+  /**
+   * Preparar entorno específico para agente
+   */
+  async prepareAgentEnvironment(taskDir, taskData) {
+    // Clonar repositorios si están disponibles
+    if (taskData.projectContext && taskData.projectContext.repositories) {
+      await this.cloneProjectRepositories(taskDir, taskData.projectContext);
+    }
+
+    // Crear archivo de contexto de tarea
+    const taskContext = {
+      agentId: taskData.agentId,
+      linearTaskId: taskData.linearTaskId,
+      title: taskData.title,
+      description: taskData.description,
+      priority: taskData.priority,
+      status: taskData.status,
+      assignee: taskData.assignee,
+      labels: taskData.labels,
+      projectContext: taskData.projectContext,
+      executionMode: taskData.executionMode,
+      createdAt: new Date().toISOString()
+    };
+
+    await fs.promises.writeFile(
+      path.join(taskDir, 'task-context.json'),
+      JSON.stringify(taskContext, null, 2)
+    );
+
+    // Crear script de ejecución personalizado si no existe
+    const executionScript = taskData.executionScript || `#!/bin/bash
+echo "🤖 Agent Execution Script"
+echo "📋 Task: ${taskData.title}"
+echo "🔍 Analyzing context..."
+
+# Verificar autenticación Claude CLI
+if ! claude auth status > /dev/null 2>&1; then
+    echo "❌ Claude CLI not authenticated"
+    exit 1
+fi
+
+echo "✅ Claude CLI authenticated"
+
+# Leer contexto de la tarea
+if [ -f "task-context.json" ]; then
+    echo "📄 Task context loaded"
+    cat task-context.json | jq .title 2>/dev/null || echo "Task context available"
+fi
+
+# Ejecutar análisis con Claude
+echo "🧠 Starting intelligent analysis..."
+echo "Please analyze this Linear task and repository context to create a detailed execution plan" | claude --print
+
+echo "✅ Agent execution completed successfully"
+`;
+
+    await fs.promises.writeFile(
+      path.join(taskDir, 'execute.sh'),
+      executionScript
+    );
+
+    // Hacer ejecutable el script
+    await execAsync(`chmod +x ${path.join(taskDir, 'execute.sh')}`);
+
+    console.log(`🔧 Agent environment prepared at ${taskDir}`);
+  }
+
+  /**
+   * Mock execution para testing sin Docker  
+   */
+  async executeAgentTaskMock(instanceId, containerName, agentId, taskId, taskData, taskDir) {
+    console.log(`🧪 MOCK: Executing agent task ${taskId} for agent ${agentId}`);
+    
+    const instance = {
+      id: instanceId,
+      containerName,
+      agentId,
+      taskId,
+      taskData,
+      mode: 'mock',
+      status: 'running',
+      startTime: new Date(),
+      logs: [
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🤖 Mock agent container started' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: `📋 Task: ${taskData.title}` },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🔐 Claude CLI authentication: OK (mock)' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🧠 Analyzing task with Claude...' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '✅ Mock execution completed' }
+      ],
+      type: 'agent-mock'
+    };
+
+    this.instances.set(instanceId, instance);
+
+    // Simular ejecución asíncrona
+    setTimeout(() => {
+      instance.status = 'completed';
+      instance.endTime = new Date();
+      instance.logs.push({
+        timestamp: new Date().toISOString(),
+        type: 'stdout',
+        data: '🎯 Agent task completed successfully (mock)'
+      });
+    }, 5000);
+
+    return {
+      instanceId,
+      containerName,
+      agentId,
+      taskId,
+      mode: 'mock',
+      status: 'running',
+      message: 'Mock agent task started'
+    };
+  }
+
+  /**
+   * Buscar container compartido existente
+   */
+  async findSharedContainer(agentId) {
+    try {
+      const containerName = `shared-agent-${agentId}`;
+      const isRunning = await this.isContainerRunning(containerName);
+      
+      if (isRunning) {
+        return Array.from(this.instances.values())
+          .find(i => i.containerName === containerName && i.type === 'shared-agent');
+      }
+      
+      return null;
+    } catch (error) {
+      console.warn('⚠️ Error finding shared container:', error.message);
+      return null;
+    }
   }
 }
 

@@ -63,6 +63,21 @@ cp .env.example .env
 npm start
 ```
 
+## VPS de Producción
+```
+IP: 5.75.171.46
+OS: Ubuntu 24.04.2 LTS
+Acceso: SSH (puerto 22)
+Servicios: Docker, Node.js, Claude CLI (autenticado)
+Estado: ✅ Configurado y listo para deploy
+```
+
+### **Servicios Instalados en VPS:**
+- **Claude CLI v1.0.64**: Autenticado con cuenta Pro (sin API key)
+- **Docker**: Para aislamiento de agentes
+- **Node.js**: Runtime principal del bot
+- **PM2**: Process manager para mantener bot activo 24/7
+
 ## Variables de Entorno (.env)
 ```env
 TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
@@ -71,6 +86,9 @@ GITHUB_TOKEN=your_github_token
 DATABASE_PATH=./data/agents.db
 DOCKER_WORKSPACE_PATH=./workspace
 MAX_DOCKER_INSTANCES=10
+
+# Claude Configuration 
+CLAUDE_USE_API=false  # Claude CLI autenticado, no necesita API key
 ```
 
 ## Comandos del Sistema
@@ -227,6 +245,83 @@ CREATE TABLE task_executions (
 - Error handling completo
 - Logs centralizados
 
+## 🚀 Próximos Pasos - Roadmap de Deployment
+
+### **Fase 0: Ya Implementado ✅**
+- **Agent Manager**: Base de datos SQLite completa
+- **Linear Integration**: GraphQL API funcional
+- **GitHub Integration**: REST API + clonación
+- **Claude CLI Integration**: Atomizer con contexto
+- **Telegram UI**: Crear agente, ver tareas, seleccionar repos
+- **Agent Creation Flow**: Flujo completo funcional
+
+### **Fase 1: Deployment Base (Inmediato)**
+1. **Deploy del Bot en VPS**
+   - Crear .env.example con estructura
+   - Clonar repositorio en VPS
+   - Configurar .env con tokens reales
+   - Instalar PM2 y crear ecosystem.config.js
+   - Verificar conexión Telegram
+
+2. **Configurar Docker en VPS**
+   - Instalar Docker y Docker Compose
+   - Crear Dockerfile para agentes con Claude CLI
+   - Configurar volúmenes para workspaces
+   - Test de contenedor básico
+
+### **Fase 2: Conectar Ejecución Real (1-2 días)**
+3. **Conectar UI con DockerOrchestrator**
+   - Implementar executeTask en DockerOrchestrator
+   - Pasar contexto Linear + GitHub a contenedor
+   - Capturar logs de Claude CLI
+   - Enviar updates a Telegram
+
+4. **Testing End-to-End**
+   - Crear agente completo
+   - Ejecutar tarea simple (background)
+   - Verificar logs y resultados
+   - Validar modo interactivo
+
+### **Fase 3: Background Execution (3-5 días)**
+5. **Docker Orchestration**
+   - Crear container por tarea con workspace aislado
+   - Montar repos GitHub en container
+   - Pasar contexto Linear + código a Claude
+
+6. **Monitoreo y Control**
+   - WebSocket para updates en tiempo real
+   - Pausar/resumir agentes
+   - Ver progreso detallado por tarea
+
+### **Fase 4: Intelligence Layer (1 semana)**
+7. **Task Understanding**
+   - Claude analiza tarea Linear + codebase
+   - Genera plan de ejecución específico
+   - Identifica dependencias y riesgos
+
+8. **Execution Engine**
+   - Ejecutar plan paso a paso
+   - Manejar errores inteligentemente
+   - Rollback automático si falla
+
+## 📋 Tareas Inmediatas
+
+```bash
+# En tu máquina local:
+1. git add . && git commit -m "VPS con Claude CLI configurado"
+2. git push origin RELY-38/telegram-bot-comandos-core
+
+# En el VPS:
+3. cd /root
+4. git clone https://github.com/tu-usuario/telegram-task-agent.git
+5. cd telegram-task-agent
+6. npm install
+7. cp .env.example .env
+8. nano .env  # Configurar tokens reales
+9. npm start  # Probar que funcione
+10. pm2 start npm --name "telegram-bot" -- start
+```
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
@@ -236,3 +331,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 **CONCEPTO CORE**: Background Agents = Linear Project + GitHub Repos + Claude Intelligence + True Autonomous Execution
 
 **TESTING OBLIGATORIO**: Para dar cualquier feature por terminada, debe pasar testing end-to-end completo con validación de todos los criterios de aceptación. No hay excepciones.
+
+**VPS READY**: Claude CLI autenticado y funcionando. Listo para deploy completo del sistema.

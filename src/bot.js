@@ -16,7 +16,8 @@ const github = new GitHubManager(process.env.GITHUB_TOKEN);
 const docker = new DockerOrchestrator({
   workspacePath: process.env.DOCKER_WORKSPACE_PATH || './workspace',
   maxInstances: process.env.MAX_DOCKER_INSTANCES || 10,
-  projectRepoManager: null // Will be set after initialization
+  projectRepoManager: null, // Will be set after initialization
+  mockMode: process.env.DOCKER_MOCK_MODE === 'true' // For testing without Docker
 });
 
 // Initialize ProjectRepoManager
@@ -286,12 +287,45 @@ bot.command('tasks', async (ctx) => {
     const teamData = await linear.getIssuesByTeam(team.id);
     await ctx.deleteMessage(processingMsg.message_id);
     
-    const message = linear.formatIssuesForTelegram(teamData.issues.nodes, `${team.name} (${team.key})`);
+    // Show only pending/in-progress tasks with suggestions
+    const message = linear.formatIssuesForTelegram(teamData.issues.nodes, `${team.name} (${team.key})`, false);
     await ctx.replyWithMarkdown(message);
     
   } catch (error) {
     console.error('Error getting team tasks:', error);
     await ctx.replyWithMarkdown(`❌ *Error obteniendo tareas del equipo*\n\n${error.message}`);
+  }
+});
+
+// New command to show all tasks including completed ones
+bot.command('all_tasks', async (ctx) => {
+  const teamKey = ctx.message.text.replace('/all_tasks', '').trim();
+  
+  if (!teamKey) {
+    return ctx.replyWithMarkdown('❌ *Team key requerido*\n\n*Uso:* /all_tasks [team_key]\n*Ejemplo:* /all_tasks DEV\n\nUsa /linear para ver equipos disponibles.');
+  }
+  
+  try {
+    const processingMsg = await ctx.reply(`🔄 Obteniendo todas las tareas del equipo ${teamKey}...`);
+    
+    const teams = await linear.getTeams();
+    const team = teams.find(t => t.key.toLowerCase() === teamKey.toLowerCase());
+    
+    if (!team) {
+      await ctx.deleteMessage(processingMsg.message_id);
+      return ctx.replyWithMarkdown(`❌ *Equipo no encontrado: ${teamKey}*\n\nEquipos disponibles:\n${teams.map(t => `• ${t.key} - ${t.name}`).join('\n')}`);
+    }
+    
+    const teamData = await linear.getIssuesByTeam(team.id);
+    await ctx.deleteMessage(processingMsg.message_id);
+    
+    // Show all tasks including completed ones
+    const message = linear.formatIssuesForTelegram(teamData.issues.nodes, `${team.name} (${team.key}) - TODAS`, true);
+    await ctx.replyWithMarkdown(message);
+    
+  } catch (error) {
+    console.error('Error getting all team tasks:', error);
+    await ctx.replyWithMarkdown(`❌ *Error obteniendo todas las tareas del equipo*\n\n${error.message}`);
   }
 });
 
@@ -806,8 +840,13 @@ Descompone proyectos complejos en tareas atómicas ejecutables.
 
 *🔧 Comandos Linear:*
 /linear - Ver equipos y proyectos
-/tasks [team_key] - Ver tareas de equipo
 /atomize [issue_id] - Atomizar tarea Linear
+
+*🤖 Interfaz de Agentes (Botones):*
+Usa los botones inline para navegar por los agentes:
+• 📋 Ver Tareas - Muestra tareas pendientes con sugerencias inteligentes
+• 📋 Ver Todas - Muestra todas las tareas incluidas completadas
+• 💡 Indicador de sugerencia - Resalta la tarea más importante
 
 *🔧 Comandos GitHub:*
 /repos - Ver repositorios disponibles
@@ -1087,8 +1126,16 @@ bot.on('text', async (ctx) => {
           0
         );
         
-        // TODO: Here we would start the actual interactive execution
-        // For now, we'll simulate the start
+        // Start actual interactive execution with user prompt
+        try {
+          await startInteractiveTaskExecution(agent, task, execution, text);
+        } catch (error) {
+          console.error('Failed to start interactive execution:', error);
+          // Update execution as failed
+          await agentManager.updateTaskExecution(execution.id, 'failed', 0, error.message);
+          await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
+          throw error;
+        }
         
         const successMessage = `✅ *Ejecución Interactive Iniciada*
 
@@ -1519,12 +1566,128 @@ bot.action(/^agent_tasks_(.+)$/, async (ctx) => {
     });
     
     const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
-    const availableTasks = projectTasks.issues.nodes.filter(task => 
-      task.state.type === 'backlog' || task.state.type === 'unstarted' || task.state.type === 'started'
+    const allTasks = projectTasks.issues.nodes;
+    
+    // Use new filtering logic (exclude completed/canceled)
+    const availableTasks = allTasks.filter(task => 
+      task.state.type !== 'completed' && task.state.type !== 'canceled'
     );
     
     if (availableTasks.length === 0) {
-      return ctx.editMessageText(`📋 *No hay tareas disponibles*\n\nTodas las tareas del proyecto ${agent.linear_project_name} están completadas.`, {
+      const completedCount = allTasks.length;
+      return ctx.editMessageText(`📋 *No hay tareas pendientes*\n\nTodas las ${completedCount} tareas del proyecto ${agent.linear_project_name} están completadas.`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '📋 Ver Completadas', callback_data: `agent_all_tasks_${agent.id}` }],
+            [{ text: `🤖 Volver a ${agent.name}`, callback_data: `view_agent_${agent.id}` }]
+          ]
+        }
+      });
+    }
+    
+    // Sort tasks and get suggestion using new logic
+    const sortedTasks = linear.sortTasksByPriority(availableTasks);
+    const suggestedTask = linear.getSuggestedTask(sortedTasks);
+    
+    let tasksMessage = `📋 *Tareas Pendientes - ${agent.linear_project_name}*\n\n`;
+    tasksMessage += `🤖 **Agente:** ${agent.name}\n`;
+    tasksMessage += `📊 **Tareas pendientes:** ${availableTasks.length}\n`;
+    
+    const completedCount = allTasks.length - availableTasks.length;
+    if (completedCount > 0) {
+      tasksMessage += `✅ **Completadas:** ${completedCount}\n`;
+    }
+    tasksMessage += '\n';
+    
+    // Show suggested task prominently
+    if (suggestedTask) {
+      const suggestedEmoji = linear.getStateEmoji(suggestedTask.state.type);
+      const suggestedPriority = linear.getPriorityEmoji(suggestedTask.priority);
+      tasksMessage += `💡 **SUGERIDA:** ${suggestedEmoji}${suggestedPriority} **${suggestedTask.identifier}**\n`;
+      tasksMessage += `📝 ${suggestedTask.title}\n`;
+      tasksMessage += `🎯 *Esta tarea debería ejecutarse primero*\n\n`;
+      tasksMessage += `──────────────────────\n\n`;
+    }
+    
+    const taskButtons = [];
+    
+    // Show top 6 tasks with suggestion indicator
+    sortedTasks.slice(0, 6).forEach((task, index) => {
+      const stateEmoji = linear.getStateEmoji(task.state.type);
+      const priorityEmoji = linear.getPriorityEmoji(task.priority);
+      const isSuggested = suggestedTask && task.id === suggestedTask.id;
+      const suggestionIndicator = isSuggested ? '💡 ' : '';
+      
+      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${task.identifier}**: ${task.title.slice(0, 45)}${task.title.length > 45 ? '...' : ''}\n`;
+      tasksMessage += `   Estado: ${task.state.name}`;
+      if (task.assignee) {
+        tasksMessage += ` • ${task.assignee.name}`;
+      }
+      tasksMessage += '\n\n';
+      
+      // Add button with suggestion indicator
+      taskButtons.push([{
+        text: `${suggestionIndicator}${stateEmoji} ${task.identifier}`,
+        callback_data: `select_task_${agent.id}_${task.id}`
+      }]);
+    });
+    
+    if (availableTasks.length > 6) {
+      tasksMessage += `*... y ${availableTasks.length - 6} tareas más*\n\n`;
+    }
+    
+    tasksMessage += '*Selecciona una tarea para ejecutar:*';
+    
+    // Add navigation buttons
+    const navButtons = [
+      { text: `🤖 Volver a ${agent.name}`, callback_data: `view_agent_${agent.id}` }
+    ];
+    
+    if (completedCount > 0) {
+      navButtons.unshift({ text: '📋 Ver Todas', callback_data: `agent_all_tasks_${agent.id}` });
+    }
+    
+    taskButtons.push(navButtons);
+    
+    await ctx.editMessageText(tasksMessage, {
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: taskButtons }
+    });
+    
+  } catch (error) {
+    console.error('Error getting agent tasks:', error);
+    await ctx.editMessageText(`❌ *Error obteniendo tareas*\n\n${error.message}`, {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// View all agent tasks (including completed ones)
+bot.action(/^agent_all_tasks_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    await ctx.editMessageText('🔄 *Obteniendo todas las tareas Linear...*', {
+      parse_mode: 'Markdown'
+    });
+    
+    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
+    const allTasks = projectTasks.issues.nodes;
+    
+    if (allTasks.length === 0) {
+      return ctx.editMessageText(`📋 *No hay tareas en el proyecto*\n\nEl proyecto ${agent.linear_project_name} no tiene tareas.`, {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [[
@@ -1534,32 +1697,69 @@ bot.action(/^agent_tasks_(.+)$/, async (ctx) => {
       });
     }
     
-    let tasksMessage = `📋 *Tareas Linear - ${agent.linear_project_name}*\n\n`;
+    // Sort tasks and get suggestion using new logic
+    const sortedTasks = linear.sortTasksByPriority(allTasks);
+    const suggestedTask = linear.getSuggestedTask(sortedTasks);
+    
+    // Count by state
+    const pendingTasks = allTasks.filter(task => 
+      task.state.type !== 'completed' && task.state.type !== 'canceled'
+    );
+    const completedTasks = allTasks.filter(task => 
+      task.state.type === 'completed' || task.state.type === 'canceled'
+    );
+    
+    let tasksMessage = `📋 *Todas las Tareas - ${agent.linear_project_name}*\n\n`;
     tasksMessage += `🤖 **Agente:** ${agent.name}\n`;
-    tasksMessage += `📊 **Tareas disponibles:** ${availableTasks.length}\n\n`;
+    tasksMessage += `📊 **Total:** ${allTasks.length} tareas\n`;
+    tasksMessage += `⏳ **Pendientes:** ${pendingTasks.length}\n`;
+    tasksMessage += `✅ **Completadas:** ${completedTasks.length}\n\n`;
+    
+    // Show suggested task prominently if exists
+    if (suggestedTask && (suggestedTask.state.type !== 'completed' && suggestedTask.state.type !== 'canceled')) {
+      const suggestedEmoji = linear.getStateEmoji(suggestedTask.state.type);
+      const suggestedPriority = linear.getPriorityEmoji(suggestedTask.priority);
+      tasksMessage += `💡 **SUGERIDA:** ${suggestedEmoji}${suggestedPriority} **${suggestedTask.identifier}**\n`;
+      tasksMessage += `📝 ${suggestedTask.title}\n`;
+      tasksMessage += `🎯 *Esta tarea debería ejecutarse primero*\n\n`;
+      tasksMessage += `──────────────────────\n\n`;
+    }
     
     const taskButtons = [];
     
-    availableTasks.slice(0, 6).forEach((task, index) => {
+    // Show top 8 tasks with suggestion indicator
+    sortedTasks.slice(0, 8).forEach((task, index) => {
       const stateEmoji = linear.getStateEmoji(task.state.type);
       const priorityEmoji = linear.getPriorityEmoji(task.priority);
+      const isSuggested = suggestedTask && task.id === suggestedTask.id;
+      const suggestionIndicator = isSuggested ? '💡 ' : '';
+      const isCompleted = task.state.type === 'completed' || task.state.type === 'canceled';
       
-      tasksMessage += `${index + 1}. ${stateEmoji}${priorityEmoji} **${task.identifier}**: ${task.title.slice(0, 50)}${task.title.length > 50 ? '...' : ''}\n`;
-      tasksMessage += `   Estado: ${task.state.name}\n\n`;
+      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${task.identifier}**: ${task.title.slice(0, 40)}${task.title.length > 40 ? '...' : ''}\n`;
+      tasksMessage += `   Estado: ${task.state.name}`;
+      if (task.assignee) {
+        tasksMessage += ` • ${task.assignee.name}`;
+      }
+      tasksMessage += '\n\n';
       
-      taskButtons.push([{
-        text: `${stateEmoji} ${task.identifier}`,
-        callback_data: `select_task_${agent.id}_${task.id}`
-      }]);
+      // Only add button for non-completed tasks
+      if (!isCompleted) {
+        taskButtons.push([{
+          text: `${suggestionIndicator}${stateEmoji} ${task.identifier}`,
+          callback_data: `select_task_${agent.id}_${task.id}`
+        }]);
+      }
     });
     
-    if (availableTasks.length > 6) {
-      tasksMessage += `... y ${availableTasks.length - 6} tareas más\n\n`;
+    if (allTasks.length > 8) {
+      tasksMessage += `*... y ${allTasks.length - 8} tareas más*\n\n`;
     }
     
-    tasksMessage += `*Selecciona una tarea para ejecutar:*`;
+    tasksMessage += '*Tareas completadas se muestran solo como información*';
     
+    // Add navigation buttons
     taskButtons.push([
+      { text: '📋 Solo Pendientes', callback_data: `agent_tasks_${agent.id}` },
       { text: `🤖 Volver a ${agent.name}`, callback_data: `view_agent_${agent.id}` }
     ]);
     
@@ -1569,7 +1769,7 @@ bot.action(/^agent_tasks_(.+)$/, async (ctx) => {
     });
     
   } catch (error) {
-    console.error('Error getting agent tasks:', error);
+    console.error('Error getting all agent tasks:', error);
     await ctx.editMessageText(`❌ *Error obteniendo tareas*\n\n${error.message}`, {
       parse_mode: 'Markdown'
     });
@@ -1686,8 +1886,16 @@ bot.action(/^execute_background_(.+)_(.+)$/, async (ctx) => {
       0
     );
     
-    // TODO: Here we would start the actual background execution
-    // For now, we'll simulate the start
+    // Start actual background execution
+    try {
+      await startBackgroundTaskExecution(agent, task, execution);
+    } catch (error) {
+      console.error('Failed to start background execution:', error);
+      // Update execution as failed
+      await agentManager.updateTaskExecution(execution.id, 'failed', 0, error.message);
+      await agentManager.updateAgentStatus(agent.id, 'idle', null, null, 0);
+      throw error;
+    }
     
     const successMessage = `✅ *Ejecución Background Iniciada*
 
@@ -2694,6 +2902,202 @@ bot.action(/^github_structure_(.+)$/, async (ctx) => {
     });
   }
 });
+
+// Task execution functions
+async function startBackgroundTaskExecution(agent, task, execution) {
+  console.log(`🚀 Starting background execution for task ${task.id}`);
+  
+  try {
+    // Get project context for the agent
+    const projectContext = await projectRepoManager.getProjectContext(agent.linear_project_id);
+    
+    // Prepare task data for agent execution
+    const taskData = {
+      agentId: agent.id,
+      linearTaskId: task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      status: task.state?.name,
+      assignee: task.assignee?.name,
+      labels: task.labels?.nodes?.map(l => l.name),
+      projectContext: projectContext,
+      executionMode: 'background',
+      executionId: execution.id,
+      // Claude prompt para análisis específico
+      claudePrompt: `Analyze this Linear task and generate a detailed execution plan:
+
+Task: ${task.title}
+Description: ${task.description}
+Priority: ${task.priority}
+
+Available repositories: ${projectContext?.repositories?.map(r => r.fullName).join(', ') || 'None'}
+
+Please:
+1. Analyze the task requirements
+2. Review the repository structure and code patterns
+3. Create a step-by-step execution plan
+4. Identify any dependencies or prerequisites
+5. Generate specific commands to complete this task
+
+Focus on understanding the existing codebase and following established patterns.`
+    };
+    
+    // Execute agent task with new DockerOrchestrator method
+    const dockerInstance = await docker.executeAgentTask(
+      agent.id,
+      task.id, 
+      taskData,
+      'background'
+    );
+    
+    console.log(`🤖 Agent container started: ${dockerInstance.instanceId}`);
+    
+    // Update execution with Docker instance info
+    await agentManager.updateTaskExecution(
+      execution.id,
+      'running',
+      10, // Initial progress
+      `Agent container started: ${dockerInstance.containerName}`
+    );
+    
+    // Monitor execution progress
+    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id);
+    
+  } catch (error) {
+    console.error('Failed to start background execution:', error);
+    throw error;
+  }
+}
+
+async function startInteractiveTaskExecution(agent, task, execution, userPrompt) {
+  console.log(`🚀 Starting interactive execution for task ${task.id} with prompt: ${userPrompt}`);
+  
+  try {
+    // Get project context for the agent
+    const projectContext = await projectRepoManager.getProjectContext(agent.linear_project_id);
+    
+    // Prepare task data for interactive agent execution
+    const taskData = {
+      agentId: agent.id,
+      linearTaskId: task.id,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      status: task.state?.name,
+      assignee: task.assignee?.name,
+      labels: task.labels?.nodes?.map(l => l.name),
+      projectContext: projectContext,
+      executionMode: 'interactive',
+      executionId: execution.id,
+      userPrompt: userPrompt,
+      // Claude prompt personalizado con instrucciones del usuario
+      claudePrompt: `Analyze this Linear task with specific user instructions:
+
+Task: ${task.title}
+Description: ${task.description}
+Priority: ${task.priority}
+
+User Instructions: ${userPrompt}
+
+Available repositories: ${projectContext?.repositories?.map(r => r.fullName).join(', ') || 'None'}
+
+Please:
+1. Follow the user's specific instructions carefully
+2. Analyze the task requirements in context of user preferences
+3. Review the repository structure and code patterns
+4. Create a step-by-step execution plan that incorporates user guidance
+5. Ask clarifying questions if the user instructions are ambiguous
+6. Generate specific commands to complete this task as requested
+
+Focus on the user's preferences while maintaining code quality and following established patterns.`
+    };
+    
+    // Execute agent task with new DockerOrchestrator method
+    const dockerInstance = await docker.executeAgentTask(
+      agent.id,
+      task.id, 
+      taskData,
+      'interactive'
+    );
+    
+    console.log(`🤖 Interactive agent container started: ${dockerInstance.instanceId}`);
+    
+    // Update execution with Docker instance info
+    await agentManager.updateTaskExecution(
+      execution.id,
+      'running',
+      10, // Initial progress
+      `Interactive agent started: ${dockerInstance.containerName}`
+    );
+    
+    // Monitor execution progress
+    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id);
+    
+  } catch (error) {
+    console.error('Failed to start interactive execution:', error);
+    throw error;
+  }
+}
+
+async function monitorTaskExecution(dockerInstanceId, executionId, agentId) {
+  console.log(`📊 Monitoring execution ${executionId} on Docker instance ${dockerInstanceId}`);
+  
+  const checkInterval = setInterval(async () => {
+    try {
+      const instances = await docker.getInstances();
+      const instance = instances.find(i => i.id === dockerInstanceId);
+      
+      if (!instance) {
+        console.log(`Instance ${dockerInstanceId} not found, stopping monitoring`);
+        clearInterval(checkInterval);
+        return;
+      }
+      
+      // Update progress based on instance status
+      let progress = 10;
+      let status = 'running';
+      let logs = 'Running...';
+      
+      if (instance.status === 'completed') {
+        progress = 100;
+        status = 'completed';
+        logs = 'Task completed successfully';
+        clearInterval(checkInterval);
+        
+        // Update agent status to idle
+        await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
+        
+      } else if (instance.status === 'failed') {
+        progress = 0;
+        status = 'failed';
+        logs = 'Task execution failed';
+        clearInterval(checkInterval);
+        
+        // Update agent status to idle
+        await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
+        
+      } else if (instance.status === 'running') {
+        // Calculate progress based on uptime (rough estimate)
+        const uptimeMinutes = parseFloat(instance.uptime.replace(/[^\d.]/g, ''));
+        progress = Math.min(90, 10 + (uptimeMinutes * 5)); // Max 90% until completed
+      }
+      
+      // Update execution status
+      await agentManager.updateTaskExecution(executionId, status, progress, logs);
+      
+    } catch (error) {
+      console.error('Error monitoring task execution:', error);
+      clearInterval(checkInterval);
+    }
+  }, 30000); // Check every 30 seconds
+  
+  // Set timeout to stop monitoring after 1 hour
+  setTimeout(() => {
+    clearInterval(checkInterval);
+    console.log(`⏰ Monitoring timeout for execution ${executionId}`);
+  }, 3600000); // 1 hour
+}
 
 console.log('🚀 Starting Enhanced Telegram Task Agent...');
 console.log('✅ RELY-52 Enhanced TaskAtomizer ready');
