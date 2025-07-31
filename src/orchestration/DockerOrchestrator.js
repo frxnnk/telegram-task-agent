@@ -530,6 +530,8 @@ executeTask();
       '-d',
       // Montar autenticación Claude CLI (solo lectura)
       '-v', '/root/.claude:/root/.claude:ro',
+      // Montar binario Claude CLI (solo lectura)
+      '-v', '/usr/bin/claude:/usr/local/bin/claude:ro',
       // Montar workspace
       '-v', `${taskDir}:/workspace`,
       '-w', '/workspace',

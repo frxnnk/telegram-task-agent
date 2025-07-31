@@ -19,11 +19,11 @@ RUN apt-get update && apt-get install -y \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Claude CLI
-RUN curl -sSL https://claude.ai/cli/install.sh | bash
+# Crear directorio para montar Claude CLI desde host
+RUN mkdir -p /usr/local/bin
 
-# Configurar PATH para Claude CLI  
-ENV PATH="/root/.local/bin:$PATH"
+# Configurar PATH para Claude CLI (se montará desde host)
+ENV PATH="/usr/local/bin:$PATH"
 
 # Crear directorios de trabajo
 RUN mkdir -p /workspace /logs
