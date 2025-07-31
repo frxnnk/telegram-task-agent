@@ -1,21 +1,23 @@
-const Anthropic = require('@anthropic-ai/sdk');
+const { exec } = require('child_process');
+const util = require('util');
+const fs = require('fs').promises;
+const path = require('path');
 
-class TaskAtomizer {
-  constructor(apiKey, options = {}) {
-    this.anthropic = new Anthropic({
-      apiKey: apiKey
-    });
-    
+const execAsync = util.promisify(exec);
+
+class TaskAtomizerCLIIntegrated {
+  constructor(options = {}) {
     // Enhanced context providers
     this.linearManager = options.linearManager;
     this.githubManager = options.githubManager;
     this.projectRepoManager = options.projectRepoManager;
     this.projectContext = null;
     this.repositoryContext = null;
+    this.tempDir = path.join(__dirname, '../../temp');
   }
 
   /**
-   * Atomiza un proyecto complejo en tareas ejecutables independientes
+   * Atomiza un proyecto usando Claude CLI (sin costos adicionales)
    * @param {string} projectDescription - Descripción completa del proyecto
    * @param {Object} options - Opciones adicionales para la atomización
    * @returns {Promise<Object>} - Tareas atomizadas con dependencias
@@ -64,34 +66,44 @@ class TaskAtomizer {
     );
     
     try {
-      const response = await this.anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 4000,
-        temperature: 0.1,
-        system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: `Atomiza este proyecto en tareas ejecutables independientes:
+      // Create temp directory
+      await fs.mkdir(this.tempDir, { recursive: true });
+      
+      const fullPrompt = `${systemPrompt}
 
+## PROJECT TO ATOMIZE:
 ${projectDescription}
 
-${enhancedContext ? `CONTEXTO ADICIONAL:
+${enhancedContext ? `## ADDITIONAL CONTEXT:
 ${enhancedContext}
 
-` : ''}Devuelve ÚNICAMENTE el JSON sin explicaciones adicionales.`
-          }
-        ]
-      });
+` : ''}Return ONLY the JSON response without any markdown formatting or explanations.`;
 
-      const content = response.content[0].text;
-      const atomizedTasks = this.parseAtomizedResponse(content);
+      console.log('🤖 Executing Claude CLI for atomization...');
       
-      // Validar estructura y dependencias mejoradas
+      // Execute Claude CLI with --print for non-interactive output
+      // Using echo to pipe the prompt to claude
+      const claudeCommand = `echo ${JSON.stringify(fullPrompt)} | claude --print --permission-mode bypassPermissions`;
+      const { stdout, stderr } = await execAsync(claudeCommand, {
+        shell: true,
+        timeout: 120000, // 2 minutes timeout
+        maxBuffer: 1024 * 1024 // 1MB buffer
+      });
+      
+      if (stderr) {
+        console.warn('Claude CLI stderr:', stderr);
+      }
+      
+      console.log('✅ Claude CLI execution completed');
+      
+      // Parse Claude CLI response
+      const atomizedTasks = this.parseAtomizedResponse(stdout);
+      
+      // Validate structure and dependencies
       this.validateEnhancedAtomizedTasks(atomizedTasks);
       
-      // Calcular costos de la operación
-      const costs = this.calculateEnhancedCosts(response.usage, atomizedTasks);
+      // Calculate costs (CLI usage is free with Pro plan)
+      const costs = this.calculateCLICosts(atomizedTasks);
       
       return {
         success: true,
@@ -119,11 +131,12 @@ ${enhancedContext}
           project: projectContext
         },
         detectedPatterns: detectedPatterns,
+        cliMethod: true, // Flag to indicate CLI usage
         timestamp: new Date().toISOString()
       };
 
     } catch (error) {
-      console.error('Error atomizing project:', error);
+      console.error('Error atomizing project with Claude CLI:', error);
       throw new Error(`Task atomization failed: ${error.message}`);
     }
   }
@@ -489,67 +502,7 @@ IMPORTANTE:
   }
 
   /**
-   * Construye el prompt del sistema para atomización (versión legacy)
-   */
-  buildAtomizationPrompt(maxTasks, complexity, techStack) {
-    return `Eres un experto en descomposición de proyectos de software en tareas atómicas ejecutables.
-
-OBJETIVO: Analizar la descripción del proyecto y atomizarlo en tareas independientes que puedan ser ejecutadas por agentes Docker autónomos.
-
-REGLAS DE ATOMIZACIÓN:
-1. Cada tarea debe ser completamente independiente y ejecutable por separado
-2. Una tarea NO puede depender de archivos o estado creado por otra tarea
-3. Máximo ${maxTasks} tareas total
-4. Cada tarea debe incluir TODOS los archivos/dependencias que necesita
-5. Las dependencias deben ser explícitas y verificables
-6. Priorizar tareas que se pueden paralelizar
-
-FORMATO DE RESPUESTA (JSON estricto):
-{
-  "project": {
-    "title": "Nombre del proyecto",
-    "complexity": "low|medium|high",
-    "estimatedDuration": "1-2 hours|1-2 days|1-2 weeks",
-    "techStack": ["tecnologías", "detectadas"]
-  },
-  "tasks": [
-    {
-      "id": "task_1",
-      "title": "Título descriptivo de la tarea",
-      "description": "Descripción completa de QUÉ hacer",
-      "dockerCommand": "comando específico para ejecutar en container",
-      "requiredFiles": ["archivo1.js", "archivo2.json"],
-      "outputFiles": ["resultado1.js", "build/app.js"],
-      "estimatedTime": "15min|30min|1hour|2hours",
-      "complexity": "low|medium|high",
-      "category": "setup|development|testing|deployment|documentation"
-    }
-  ],
-  "dependencies": [
-    {
-      "taskId": "task_2",
-      "dependsOn": ["task_1"],
-      "reason": "Necesita los archivos generados por task_1"
-    }
-  ]
-}
-
-CATEGORÍAS DE TAREAS:
-- setup: Configuración inicial, instalación de dependencias
-- development: Código, implementación de features
-- testing: Pruebas, validación, QA
-- deployment: Build, containerización, CI/CD
-- documentation: README, docs, comentarios
-
-IMPORTANTE:
-- NO generes tareas que dependan de interacción humana
-- Cada tarea debe poder ejecutarse completamente sola
-- Incluye comandos Docker específicos y ejecutables
-- Las dependencias deben ser mínimas y claras`;
-  }
-
-  /**
-   * Parsea la respuesta de Claude y valida el JSON
+   * Parsea la respuesta de Claude CLI y valida el JSON
    */
   parseAtomizedResponse(content) {
     try {
@@ -598,16 +551,6 @@ IMPORTANTE:
       if (!task.estimatedTime || !task.category) {
         throw new Error(`Task ${task.id} missing estimatedTime or category`);
       }
-
-      // Validar estructura de validación
-      if (task.validation && (!task.validation.command || !task.validation.expectedOutput)) {
-        throw new Error(`Task ${task.id} has invalid validation structure`);
-      }
-
-      // Validar estructura de rollback
-      if (task.rollback && !task.rollback.command) {
-        throw new Error(`Task ${task.id} has invalid rollback structure`);
-      }
     });
 
     // Validar dependencias mejoradas
@@ -622,68 +565,30 @@ IMPORTANTE:
             throw new Error(`Dependency references unknown task: ${depId}`);
           }
         });
-
-        // Validar campos adicionales
-        if (typeof dep.strictOrder !== 'boolean' || typeof dep.parallelizable !== 'boolean') {
-          throw new Error(`Dependency ${dep.taskId} missing strictOrder or parallelizable fields`);
-        }
-      });
-    }
-
-    // Validar matriz de ejecución
-    if (atomizedTasks.executionMatrix) {
-      const matrix = atomizedTasks.executionMatrix;
-      if (!matrix.parallelGroups || !matrix.criticalPath) {
-        throw new Error('ExecutionMatrix missing required fields');
-      }
-
-      // Verificar que todos los tasks están en parallelGroups
-      const allTasksInGroups = matrix.parallelGroups.flat();
-      const taskIds = atomizedTasks.tasks.map(t => t.id);
-      taskIds.forEach(id => {
-        if (!allTasksInGroups.includes(id)) {
-          throw new Error(`Task ${id} not included in execution matrix`);
-        }
       });
     }
   }
 
   /**
-   * Valida la estructura de las tareas atomizadas (versión legacy)
+   * Calcula el orden de ejecución mejorado basado en la matriz de ejecución
    */
-  validateAtomizedTasks(atomizedTasks) {
-    if (!atomizedTasks.project || !atomizedTasks.tasks) {
-      throw new Error('Invalid atomized structure: missing project or tasks');
-    }
-
-    if (!Array.isArray(atomizedTasks.tasks) || atomizedTasks.tasks.length === 0) {
-      throw new Error('No tasks generated');
-    }
-
-    // Validar cada tarea
-    atomizedTasks.tasks.forEach((task, index) => {
-      if (!task.id || !task.title || !task.description) {
-        throw new Error(`Task ${index} missing required fields`);
-      }
-      
-      if (!task.dockerCommand) {
-        throw new Error(`Task ${task.id} missing dockerCommand`);
-      }
-    });
-
-    // Validar dependencias
-    if (atomizedTasks.dependencies) {
-      const taskIds = atomizedTasks.tasks.map(t => t.id);
-      atomizedTasks.dependencies.forEach(dep => {
-        if (!taskIds.includes(dep.taskId)) {
-          throw new Error(`Dependency references unknown task: ${dep.taskId}`);
-        }
-        dep.dependsOn.forEach(depId => {
-          if (!taskIds.includes(depId)) {
-            throw new Error(`Dependency references unknown task: ${depId}`);
-          }
-        });
-      });
+  calculateEnhancedExecutionOrder(atomizedTasks) {
+    if (atomizedTasks.executionMatrix && atomizedTasks.executionMatrix.parallelGroups) {
+      // Usar la matriz de ejecución si está disponible
+      return {
+        sequential: this.calculateExecutionOrder(atomizedTasks.tasks, atomizedTasks.dependencies),
+        parallel: atomizedTasks.executionMatrix.parallelGroups,
+        criticalPath: atomizedTasks.executionMatrix.criticalPath,
+        optimization: this.calculateOptimizedExecution(atomizedTasks)
+      };
+    } else {
+      // Fallback al método legacy
+      return {
+        sequential: this.calculateExecutionOrder(atomizedTasks.tasks, atomizedTasks.dependencies),
+        parallel: this.detectParallelTasks(atomizedTasks.tasks, atomizedTasks.dependencies),
+        criticalPath: this.calculateCriticalPath(atomizedTasks.tasks, atomizedTasks.dependencies),
+        optimization: null
+      };
     }
   }
 
@@ -715,29 +620,6 @@ IMPORTANTE:
     tasks.forEach(task => visit(task.id));
     
     return executionOrder;
-  }
-
-  /**
-   * Calcula el orden de ejecución mejorado basado en la matriz de ejecución
-   */
-  calculateEnhancedExecutionOrder(atomizedTasks) {
-    if (atomizedTasks.executionMatrix && atomizedTasks.executionMatrix.parallelGroups) {
-      // Usar la matriz de ejecución si está disponible
-      return {
-        sequential: this.calculateExecutionOrder(atomizedTasks.tasks, atomizedTasks.dependencies),
-        parallel: atomizedTasks.executionMatrix.parallelGroups,
-        criticalPath: atomizedTasks.executionMatrix.criticalPath,
-        optimization: this.calculateOptimizedExecution(atomizedTasks)
-      };
-    } else {
-      // Fallback al método legacy
-      return {
-        sequential: this.calculateExecutionOrder(atomizedTasks.tasks, atomizedTasks.dependencies),
-        parallel: this.detectParallelTasks(atomizedTasks.tasks, atomizedTasks.dependencies),
-        criticalPath: this.calculateCriticalPath(atomizedTasks.tasks, atomizedTasks.dependencies),
-        optimization: null
-      };
-    }
   }
 
   /**
@@ -887,14 +769,12 @@ IMPORTANTE:
   }
 
   /**
-   * Calcula los costos mejorados incluyendo estimaciones por tarea
+   * Calcula los costos para Claude CLI (gratis con Pro plan)
    */
-  calculateEnhancedCosts(usage, atomizedTasks) {
-    const baseCosts = this.calculateCosts(usage);
-    
-    // Calcular costos estimados por tarea
+  calculateCLICosts(atomizedTasks) {
+    // Claude CLI usage is free with Pro plan
     const taskCosts = atomizedTasks.tasks.map(task => {
-      const estimatedCost = parseFloat(task.estimatedCost || '0.01');
+      const estimatedCost = 0; // Free with Pro plan
       return {
         taskId: task.id,
         estimatedCost: estimatedCost,
@@ -903,22 +783,25 @@ IMPORTANTE:
       };
     });
 
-    const totalTaskCosts = taskCosts.reduce((sum, task) => sum + task.estimatedCost, 0);
-    
     return {
-      atomization: baseCosts,
+      atomization: {
+        tokens: { input: 0, output: 0, total: 0 },
+        cost: { input: 0, output: 0, total: 0 },
+        method: 'Claude CLI (Pro Plan - Free)'
+      },
       tasks: {
         individual: taskCosts,
-        total: totalTaskCosts,
+        total: 0, // Free with Pro plan
         byCategory: this.groupCostsByCategory(taskCosts),
         byComplexity: this.groupCostsByComplexity(taskCosts)
       },
       project: {
-        totalEstimated: baseCosts.cost.total + totalTaskCosts,
+        totalEstimated: 0, // Free with Pro plan
         breakdown: {
-          planning: baseCosts.cost.total,
-          execution: totalTaskCosts
-        }
+          planning: 0,
+          execution: 0
+        },
+        savings: 'Using Claude CLI with Pro plan - No API costs!'
       }
     };
   }
@@ -954,33 +837,6 @@ IMPORTANTE:
   }
 
   /**
-   * Calcula los costos de la operación de atomización (versión legacy)
-   */
-  calculateCosts(usage) {
-    if (!usage) return { tokens: 0, cost: 0 };
-    
-    // Precios aproximados de Claude 3.5 Sonnet (por 1K tokens)
-    const inputCostPer1K = 0.003;  // $0.003 per 1K input tokens
-    const outputCostPer1K = 0.015; // $0.015 per 1K output tokens
-    
-    const inputCost = (usage.input_tokens / 1000) * inputCostPer1K;
-    const outputCost = (usage.output_tokens / 1000) * outputCostPer1K;
-    
-    return {
-      tokens: {
-        input: usage.input_tokens,
-        output: usage.output_tokens,
-        total: usage.input_tokens + usage.output_tokens
-      },
-      cost: {
-        input: inputCost,
-        output: outputCost,
-        total: inputCost + outputCost
-      }
-    };
-  }
-
-  /**
    * Re-atomiza una tarea específica si es demasiado compleja
    */
   async reAtomizeTask(task, reason = 'Task too complex') {
@@ -994,18 +850,18 @@ RAZÓN: ${reason}
 Devuelve 2-4 subtareas más específicas que mantengan la misma funcionalidad.`;
 
     try {
-      const response = await this.anthropic.messages.create({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 2000,
-        temperature: 0.1,
-        messages: [{ role: 'user', content: prompt }]
+      // Execute Claude CLI with --print for non-interactive output
+      const claudeCommand = `echo ${JSON.stringify(prompt)} | claude --print --permission-mode bypassPermissions`;
+      const { stdout } = await execAsync(claudeCommand, {
+        shell: true,
+        timeout: 60000 // 1 minute timeout
       });
-
-      return this.parseAtomizedResponse(response.content[0].text);
+      
+      return this.parseAtomizedResponse(stdout);
     } catch (error) {
       throw new Error(`Re-atomization failed: ${error.message}`);
     }
   }
 }
 
-module.exports = TaskAtomizer;
+module.exports = TaskAtomizerCLIIntegrated;

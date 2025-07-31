@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node src/bot.js",
     "dev": "nodemon src/bot.js",
-    "test": "echo \"No tests yet\""
+    "test": "node tests/test-docker-mock.js && node tests/test-linear-mock.js",
+    "test:all": "for file in tests/test-*.js; do echo \"Running $file...\"; node \"$file\" || exit 1; done",
+    "test:integration": "node tests/test-linear-integration.js && node tests/test-github-integration.js",
+    "deploy": "cd scripts && ./deploy-vps.sh"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",

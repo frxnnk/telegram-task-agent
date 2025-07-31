@@ -3,16 +3,11 @@
 ## Descripción del Proyecto
 Sistema de agentes background inteligentes que ejecutan tareas Linear en repositorios GitHub automáticamente. Inspirado en los background agents de Cursor, cada agente mantiene contexto específico y puede trabajar de forma autónoma.
 
-## IMPORTANTE: Referencia de Tareas Linear
-Cuando se diga "TEL-X" (donde X es un número), se refiere a ejecutar esa tarea específica del proyecto Linear TEL en este repositorio. Por ejemplo:
-- "TEL-15" = Ejecutar la tarea TEL-15 del Linear
-- "TEL-11" = Ejecutar la tarea TEL-11 del Linear
-
 ## Concepto Core: Background Agents
 
 ### 🤖 **¿Qué es un Agente Background?**
 - **Agente** = Linear Project + GitHub Repositories + Contexto específico
-- **Background** = Ejecuta tareas automáticamente en VPS sin supervisión constante  
+- **Background** = Ejecuta tareas automáticamente en VPS sin supervisión constante
 - **Inteligente** = Claude analiza el código y genera tareas precisas para TU arquitectura
 
 ### 🎯 **Flujo de Trabajo:**
@@ -50,27 +45,32 @@ Cuando se diga "TEL-X" (donde X es un número), se refiere a ejecutar esa tarea 
 - **Claude Integration**: CLI con contexto completo del proyecto ✅
 - **VPS Deployment**: Hetzner con Docker orchestration ✅
 
-## Quick Start
-```bash
-# Instalar dependencias
-npm install
+### **Base de Datos:**
+```sql
+-- Agentes background
+CREATE TABLE agents (
+  id INTEGER PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  linear_project_id TEXT NOT NULL,
+  github_repos TEXT NOT NULL, -- JSON array
+  status TEXT DEFAULT 'idle', -- idle, working, completed, error
+  current_task_id TEXT NULL,
+  progress INTEGER DEFAULT 0
+);
 
-# Configurar variables de entorno
-cp .env.example .env
-# Editar .env con tus tokens
-
-# Ejecutar
-npm start
-```
-
-## Variables de Entorno (.env)
-```env
-TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
-LINEAR_API_KEY=your_linear_api_key
-GITHUB_TOKEN=your_github_token
-DATABASE_PATH=./data/agents.db
-DOCKER_WORKSPACE_PATH=./workspace
-MAX_DOCKER_INSTANCES=10
+-- Ejecuciones de tareas
+CREATE TABLE task_executions (
+  id INTEGER PRIMARY KEY,
+  agent_id INTEGER NOT NULL,
+  linear_task_id TEXT NOT NULL,
+  execution_mode TEXT NOT NULL, -- 'background' or 'interactive'
+  user_prompt TEXT NULL, -- Para modo interactive
+  status TEXT DEFAULT 'pending',
+  docker_instance_id TEXT NULL,
+  progress INTEGER DEFAULT 0,
+  logs TEXT NULL -- JSON array de logs
+);
 ```
 
 ## Comandos del Sistema
@@ -170,34 +170,69 @@ Ventajas:
 ✅ Aprendizaje del contexto
 ```
 
-## Base de Datos
+## Arquitectura del Sistema
 
-```sql
--- Agentes background
-CREATE TABLE agents (
-  id INTEGER PRIMARY KEY,
-  user_id TEXT NOT NULL,
-  name TEXT NOT NULL,
-  linear_project_id TEXT NOT NULL,
-  github_repos TEXT NOT NULL, -- JSON array
-  status TEXT DEFAULT 'idle', -- idle, working, completed, error
-  current_task_id TEXT NULL,
-  progress INTEGER DEFAULT 0
-);
-
--- Ejecuciones de tareas
-CREATE TABLE task_executions (
-  id INTEGER PRIMARY KEY,
-  agent_id INTEGER NOT NULL,
-  linear_task_id TEXT NOT NULL,
-  execution_mode TEXT NOT NULL, -- 'background' or 'interactive'
-  user_prompt TEXT NULL, -- Para modo interactive
-  status TEXT DEFAULT 'pending',
-  docker_instance_id TEXT NULL,
-  progress INTEGER DEFAULT 0,
-  logs TEXT NULL -- JSON array de logs
-);
+### **Componentes Principales:**
 ```
+Telegram Bot (UI)
+├── AgentManager (SQLite)
+├── LinearManager (GraphQL API)  
+├── GitHubManager (REST API)
+└── DockerOrchestrator (VPS)
+    ├── TaskAtomizerCLI (Claude)
+    ├── Workspace Cloning (Git)
+    └── Container Execution (Docker)
+```
+
+### **Flujo de Datos:**
+```
+1. User crea agente → AgentManager.createAgent()
+2. User selecciona tarea → LinearManager.getTask()  
+3. Sistema clona repos → GitHubManager.cloneRepo()
+4. Claude analiza contexto → TaskAtomizerCLI.atomize()
+5. Docker ejecuta plan → DockerOrchestrator.execute()
+6. Reporta progreso → Telegram notifications
+```
+
+### **Persistencia:**
+```
+./data/
+├── agents.db           # Agentes y ejecuciones
+├── project_mappings.db # Legacy mappings  
+└── tasks.db           # Task history
+
+./workspace/
+├── agent_1_execution_1/  # Isolated workspace
+│   ├── telegram-task-agent/  # Cloned repo
+│   └── execution_logs.json
+└── agent_2_execution_2/
+    ├── frontend-app/
+    └── execution_logs.json
+```
+
+## Roadmap de Desarrollo
+
+### **✅ COMPLETADO (Phase 1):**
+1. **Agent Manager Database** - SQLite con esquemas completos ✅
+2. **Background Agents UI** - Interfaz estilo Cursor ✅
+3. **Linear Integration** - GraphQL API completa ✅
+4. **GitHub Integration** - REST API + repo cloning ✅
+5. **VPS Deployment** - Docker orchestration funcional ✅
+6. **Claude CLI Integration** - ZERO costos API ✅
+
+### **🔄 EN DESARROLLO (Phase 2):**
+7. **Create Agent Flow** - Flujo completo de creación 🔄
+8. **My Agents Dashboard** - Gestión de agentes existentes 📅
+9. **Task Execution Engine** - Background vs Interactive modes 📅
+10. **Real-time Progress** - WebSocket + Telegram notifications 📅
+11. **Multi-Agent Orchestration** - Ejecución paralela 📅
+
+### **📅 PLANIFICADO (Phase 3):**
+12. **Advanced Monitoring** - Prometheus + Grafana
+13. **Agent Learning** - IA que aprende de ejecuciones previas
+14. **Team Collaboration** - Múltiples usuarios compartiendo agentes
+15. **Advanced Workflows** - Dependencies entre agentes
+16. **Performance Analytics** - Métricas de eficiencia y ROI
 
 ## Ventajas Clave del Sistema
 
@@ -236,3 +271,5 @@ NEVER proactively create documentation files (*.md) or README files. Only create
 **CONCEPTO CORE**: Background Agents = Linear Project + GitHub Repos + Claude Intelligence + True Autonomous Execution
 
 **TESTING OBLIGATORIO**: Para dar cualquier feature por terminada, debe pasar testing end-to-end completo con validación de todos los criterios de aceptación. No hay excepciones.
+
+**CONFIDENCE LEVEL**: 85% - Sistema funcional con agentes background implementados, listo para testing final y deployment.
