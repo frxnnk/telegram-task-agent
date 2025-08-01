@@ -1847,6 +1847,85 @@ bot.action(/^select_task_(.+)_(.+)$/, async (ctx) => {
   }
 });
 
+// Handle agent execute background (show task selection)
+bot.action(/^agent_execute_background_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    await ctx.editMessageText('🔄 *Obteniendo tareas disponibles...*', {
+      parse_mode: 'Markdown'
+    });
+    
+    // Get available tasks
+    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
+    const availableTasks = projectTasks.filter(task => 
+      task.state?.name !== 'Done' && 
+      task.state?.name !== 'Canceled'
+    );
+    
+    if (availableTasks.length === 0) {
+      return ctx.editMessageText('❌ *No hay tareas disponibles*\n\nTodas las tareas están completadas o canceladas.', {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '🔙 Volver al Agente', callback_data: `view_agent_${agent.id}` }
+          ]]
+        }
+      });
+    }
+    
+    // Show task selection for background execution
+    let taskMessage = `🚀 *Ejecutar Background - Seleccionar Tarea*\n\n`;
+    taskMessage += `🤖 **Agente:** ${agent.name}\n`;
+    taskMessage += `📋 **Proyecto:** ${agent.linear_project_id}\n\n`;
+    taskMessage += `**▶️ Background (Automático):**\n`;
+    taskMessage += `Claude ejecutará la tarea completamente sin preguntar.\n\n`;
+    taskMessage += `**Tareas disponibles (${availableTasks.length}):**\n\n`;
+    
+    const buttons = [];
+    
+    availableTasks.slice(0, 8).forEach(task => {
+      const priority = task.priority ? `${getPriorityEmoji(task.priority)} ` : '';
+      const shortTitle = task.title.length > 35 ? task.title.substring(0, 35) + '...' : task.title;
+      
+      taskMessage += `${priority}**${shortTitle}**\n`;
+      taskMessage += `└ Estado: ${task.state?.name || 'N/A'}\n\n`;
+      
+      buttons.push([
+        { text: '▶️ Ejecutar Background', callback_data: `execute_background_${agent.id}_${task.id}` },
+      ]);
+    });
+    
+    buttons.push([
+      { text: '🔙 Volver al Agente', callback_data: `view_agent_${agent.id}` }
+    ]);
+    
+    await ctx.editMessageText(taskMessage, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: buttons
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error showing background task selection:', error);
+    await ctx.editMessageText('❌ *Error obteniendo tareas*', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
 // Execute task in background mode
 bot.action(/^execute_background_(.+)_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery();
