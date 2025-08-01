@@ -1481,9 +1481,10 @@ bot.action(/^view_agent_(.+)$/, async (ctx) => {
     }
     
     // Get tasks from Linear project
-    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
-    const availableTasks = projectTasks.issues.nodes.filter(task => 
-      task.state.type === 'backlog' || task.state.type === 'unstarted' || task.state.type === 'started'
+    const projectData = await linear.getIssuesByProject(agent.linear_project_id);
+    const projectTasks = projectData?.issues?.nodes || [];
+    const availableTasks = projectTasks.filter(task => 
+      task.state?.type === 'backlog' || task.state?.type === 'unstarted' || task.state?.type === 'started'
     );
     
     const statusIcon = getAgentStatusIcon(agent.status);
@@ -1565,12 +1566,12 @@ bot.action(/^agent_tasks_(.+)$/, async (ctx) => {
       parse_mode: 'Markdown'
     });
     
-    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
-    const allTasks = projectTasks.issues.nodes;
+    const projectData = await linear.getIssuesByProject(agent.linear_project_id);
+    const allTasks = projectData?.issues?.nodes || [];
     
     // Use new filtering logic (exclude completed/canceled)
     const availableTasks = allTasks.filter(task => 
-      task.state.type !== 'completed' && task.state.type !== 'canceled'
+      task.state?.type !== 'completed' && task.state?.type !== 'canceled'
     );
     
     if (availableTasks.length === 0) {
@@ -1683,8 +1684,8 @@ bot.action(/^agent_all_tasks_(.+)$/, async (ctx) => {
       parse_mode: 'Markdown'
     });
     
-    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
-    const allTasks = projectTasks.issues.nodes;
+    const projectData = await linear.getIssuesByProject(agent.linear_project_id);
+    const allTasks = projectData?.issues?.nodes || [];
     
     if (allTasks.length === 0) {
       return ctx.editMessageText(`📋 *No hay tareas en el proyecto*\n\nEl proyecto ${agent.linear_project_name} no tiene tareas.`, {
@@ -1868,7 +1869,8 @@ bot.action(/^agent_execute_background_(.+)$/, async (ctx) => {
     });
     
     // Get available tasks
-    const projectTasks = await linear.getIssuesByProject(agent.linear_project_id);
+    const projectData = await linear.getIssuesByProject(agent.linear_project_id);
+    const projectTasks = projectData?.issues?.nodes || [];
     const availableTasks = projectTasks.filter(task => 
       task.state?.name !== 'Done' && 
       task.state?.name !== 'Canceled'
@@ -2835,7 +2837,8 @@ bot.action(/^linear_project_(.+)$/, async (ctx) => {
     await ctx.editMessageText(`🔄 Obteniendo tareas del proyecto...`, { parse_mode: 'Markdown' });
     
     const projectData = await linear.getIssuesByProject(projectId);
-    const message = linear.formatIssuesForTelegram(projectData.issues.nodes, projectData.name);
+    const tasks = projectData?.issues?.nodes || [];
+    const message = linear.formatIssuesForTelegram(tasks, projectData?.name || 'Unknown Project');
     
     await ctx.editMessageText(message, {
       parse_mode: 'Markdown',
