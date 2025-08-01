@@ -3117,15 +3117,19 @@ async function monitorBackgroundExecution(dockerInstance, agent, task, execution
       const timeElapsed = Math.floor((Date.now() - lastUpdateTime) / 1000 / 60);
       
       // Send updates every check (every 10 seconds)
+      const escapedContainerName = escapeMarkdown(dockerInstance.containerName);
+      const escapedStatus = escapeMarkdown(containerStatus.status);
+      const escapedLogs = recentLogs.length > 400 ? recentLogs.substring(0, 400) + '...' : recentLogs;
+      
       await ctx.editMessageText(`🔄 *Agente ejecutándose...*
 
-🐳 **Container:** ${dockerInstance.containerName}
+🐳 **Container:** ${escapedContainerName}
 ⏱️ **Tiempo:** ${timeElapsed}+ minutos  
-📊 **Estado:** ${containerStatus.status}
+📊 **Estado:** ${escapedStatus}
 
 📝 **Logs recientes:**
 \`\`\`
-${recentLogs.length > 400 ? recentLogs.substring(0, 400) + '...' : recentLogs}
+${escapedLogs}
 \`\`\`
 
 ⏳ *Claude CLI trabajando automáticamente...*`, {
@@ -3138,8 +3142,8 @@ ${recentLogs.length > 400 ? recentLogs.substring(0, 400) + '...' : recentLogs}
         }
       });
       
-      // If container finished (exited)
-      if (containerStatus.status === 'exited' || containerStatus.status === 'completed') {
+      // If container finished (exited, completed, or not found - which means it finished and was removed)
+      if (containerStatus.status === 'exited' || containerStatus.status === 'completed' || containerStatus.status === 'not_found') {
         clearInterval(checkInterval);
         
         // Get final logs

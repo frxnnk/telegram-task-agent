@@ -1021,10 +1021,24 @@ echo "✅ Agent execution completed successfully"
         return 'Instance not found';
       }
       
-      // Get Docker container logs
+      // Get Docker container logs (even if container has been removed)
       try {
-        const { stdout } = await execAsync(`docker logs ${instance.containerName} --tail=100`);
-        return stdout;
+        // Try to get logs from running or stopped container first
+        const { stdout } = await execAsync(`docker logs ${instance.containerName} --tail=100 2>/dev/null || echo "Container removed"`);
+        
+        if (stdout && stdout !== "Container removed\n") {
+          return stdout;
+        }
+        
+        // If container was removed, try to get cached logs or check if we have stored logs
+        const cachedLogs = this.logs.get(instanceId);
+        if (cachedLogs) {
+          return cachedLogs;
+        }
+        
+        // If no cached logs, return a completion message
+        return 'Tarea completada. Los logs del contenedor han sido limpiados automáticamente.';
+        
       } catch (error) {
         console.error(`Error getting logs for ${instanceId}:`, error);
         return this.logs.get(instanceId) || 'No logs available';
