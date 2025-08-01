@@ -766,6 +766,218 @@ echo "✅ Agent execution completed successfully"
       return null;
     }
   }
+
+  /**
+   * Crear container compartido para tareas interactivas
+   */
+  async createSharedAgentContainer(instanceId, agentId, taskId, taskData) {
+    const containerName = `shared-agent-${agentId}`;
+    const taskDir = path.join(this.workspacePath, `shared-${agentId}`);
+    
+    await this.ensureDirectory(taskDir);
+    await this.prepareAgentEnvironment(taskDir, taskData);
+    
+    console.log(`🆕 Creating shared container: ${containerName}`);
+    console.log(`📁 Shared workspace: ${taskDir}`);
+    
+    if (this.mockMode) {
+      return this.createSharedAgentContainerMock(instanceId, containerName, agentId, taskId, taskData, taskDir);
+    }
+    
+    // Comando Docker para container compartido persistente
+    const dockerCommand = [
+      'docker', 'run',
+      '--name', containerName,
+      '--rm',
+      '-d',
+      // Montar autenticación Claude CLI (solo lectura)
+      '-v', '/root/.claude:/root/.claude:ro',
+      // Montar binario Claude CLI (solo lectura) 
+      '-v', '/usr/bin/claude:/usr/local/bin/claude:ro',
+      // Montar workspace compartido
+      '-v', `${taskDir}:/workspace`,
+      '-w', '/workspace',
+      // Límites de recursos
+      '--memory=2g',
+      '--cpus=4',
+      // Red para clonar repos
+      '--network=bridge',
+      // Imagen de agente
+      'claude-agent:latest',
+      // Comando que mantiene el container vivo
+      'tail', '-f', '/dev/null'
+    ];
+    
+    const process = spawn(dockerCommand[0], dockerCommand.slice(1), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: taskDir
+    });
+
+    const instance = {
+      id: instanceId,
+      containerName,
+      agentId,
+      taskId,
+      taskData,
+      mode: 'shared',
+      process,
+      status: 'running',
+      startTime: new Date(),
+      logs: [],
+      type: 'shared-agent',
+      tasks: [taskId] // Track tasks using this container
+    };
+
+    this.instances.set(instanceId, instance);
+    this.setupLogCapture(instance);
+    this.setupProcessHandlers(instance);
+
+    console.log(`✅ Shared container ${containerName} created for agent ${agentId}`);
+    
+    return {
+      instanceId,
+      containerName,
+      agentId,
+      taskId,
+      mode: 'shared',
+      status: 'running',
+      message: 'Shared agent container created'
+    };
+  }
+
+  /**
+   * Mock para container compartido
+   */
+  async createSharedAgentContainerMock(instanceId, containerName, agentId, taskId, taskData, taskDir) {
+    console.log(`🧪 MOCK: Creating shared container ${containerName} for agent ${agentId}`);
+    
+    const instance = {
+      id: instanceId,
+      containerName,
+      agentId,
+      taskId,
+      taskData,
+      mode: 'shared-mock',
+      status: 'running',
+      startTime: new Date(),
+      logs: [
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🤖 Mock shared container created' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: `📋 Agent: ${agentId}` },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: `📋 Task: ${taskData.title}` },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🔐 Claude CLI authentication: OK (mock)' },
+        { timestamp: new Date().toISOString(), type: 'stdout', data: '🔄 Shared container ready for interactive tasks' }
+      ],
+      type: 'shared-agent-mock',
+      tasks: [taskId]
+    };
+
+    this.instances.set(instanceId, instance);
+
+    // Mantener container "vivo" en mock mode
+    setTimeout(() => {
+      instance.logs.push({
+        timestamp: new Date().toISOString(),
+        type: 'stdout',
+        data: '✅ Shared container initialization complete (mock)'
+      });
+    }, 2000);
+
+    return {
+      instanceId,
+      containerName,
+      agentId,
+      taskId,
+      mode: 'shared-mock',
+      status: 'running',
+      message: 'Mock shared container created'
+    };
+  }
+
+  /**
+   * Ejecutar tarea en container compartido existente
+   */
+  async executeInSharedContainer(existingContainer, instanceId, taskId, taskData) {
+    console.log(`🔄 Executing task ${taskId} in existing shared container`);
+    
+    if (this.mockMode) {
+      return this.executeInSharedContainerMock(existingContainer, instanceId, taskId, taskData);
+    }
+    
+    // Ejecutar comando en container compartido existente
+    const command = this.buildAgentCommand(taskData);
+    
+    try {
+      const { stdout, stderr } = await execAsync(`docker exec ${existingContainer.containerName} bash -c "${command}"`);
+      
+      const execution = {
+        instanceId,
+        containerName: existingContainer.containerName,
+        agentId: existingContainer.agentId,
+        taskId,
+        mode: 'shared-execution',
+        status: 'completed',
+        output: stdout,
+        error: stderr,
+        startTime: new Date(),
+        endTime: new Date()
+      };
+      
+      // Agregar tarea a la lista del container compartido
+      if (!existingContainer.tasks.includes(taskId)) {
+        existingContainer.tasks.push(taskId);
+      }
+      
+      return execution;
+      
+    } catch (error) {
+      console.error(`❌ Error executing in shared container:`, error);
+      
+      return {
+        instanceId,
+        containerName: existingContainer.containerName,
+        agentId: existingContainer.agentId,
+        taskId,
+        mode: 'shared-execution',
+        status: 'failed',
+        error: error.message,
+        startTime: new Date(),
+        endTime: new Date()
+      };
+    }
+  }
+
+  /**
+   * Mock para ejecución en container compartido
+   */
+  async executeInSharedContainerMock(existingContainer, instanceId, taskId, taskData) {
+    console.log(`🧪 MOCK: Executing task ${taskId} in shared container (mock)`);
+    
+    // Simular logs de ejecución
+    existingContainer.logs.push(
+      { timestamp: new Date().toISOString(), type: 'stdout', data: `🔄 Starting new task: ${taskData.title}` },
+      { timestamp: new Date().toISOString(), type: 'stdout', data: '🧠 Analyzing with Claude...' },
+      { timestamp: new Date().toISOString(), type: 'stdout', data: '✅ Task completed in shared container (mock)' }
+    );
+    
+    const execution = {
+      instanceId,
+      containerName: existingContainer.containerName,
+      agentId: existingContainer.agentId,
+      taskId,
+      mode: 'shared-execution-mock',
+      status: 'completed',
+      output: 'Mock execution completed successfully',
+      startTime: new Date(),
+      endTime: new Date()
+    };
+    
+    // Agregar tarea a la lista del container compartido
+    if (!existingContainer.tasks.includes(taskId)) {
+      existingContainer.tasks.push(taskId);
+    }
+    
+    return execution;
+  }
 }
 
 module.exports = DockerOrchestrator;

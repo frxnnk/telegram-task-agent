@@ -1,249 +1,205 @@
-# Background Agents Manager - Telegram Task System
+# Background Agents Manager - Sistema de Conversación con Claude CLI
 
-## Descripción del Proyecto
-Sistema de agentes background inteligentes que ejecutan tareas Linear en repositorios GitHub automáticamente. Inspirado en los background agents de Cursor, cada agente mantiene contexto específico y puede trabajar de forma autónoma.
+## 📋 **Estado Actual: SISTEMA COMPLETAMENTE FUNCIONAL**
 
-## IMPORTANTE: Referencia de Tareas Linear
-Cuando se diga "TEL-X" (donde X es un número), se refiere a ejecutar esa tarea específica del proyecto Linear TEL en este repositorio. Por ejemplo:
-- "TEL-15" = Ejecutar la tarea TEL-15 del Linear
-- "TEL-11" = Ejecutar la tarea TEL-11 del Linear
+Sistema de agentes background que ejecutan tareas Linear a través de conversaciones directas con Claude CLI. Implementación completa con dos modos: automático y conversacional.
 
-## Concepto Core: Background Agents
+## 🎯 **Concepto Core: Chat con Claude CLI vía Telegram**
 
-### 🤖 **¿Qué es un Agente Background?**
-- **Agente** = Linear Project + GitHub Repositories + Contexto específico
-- **Background** = Ejecuta tareas automáticamente en VPS sin supervisión constante  
-- **Inteligente** = Claude analiza el código y genera tareas precisas para TU arquitectura
+### 🤖 **¿Qué hace el Sistema?**
+- **Agente** = Linear Project + GitHub Repos + Claude CLI Session
+- **Background** = Claude ejecuta tareas automáticamente sin preguntar
+- **Interactive** = Conversación directa con Claude CLI desde Telegram
+- **Real** = Claude CLI real (no simulación) ejecutándose en Docker
 
-### 🎯 **Flujo de Trabajo:**
+### 🔄 **Flujo de Trabajo Actual:**
 ```
 1. 🆕 Crear Agente
-   ├── 📛 Nombre: "TEL Deploy Agent"
-   ├── 🔗 Linear Project: TEL  
+   ├── 📛 Nombre: "TEL Agent"
+   ├── 🔗 Linear Project: TEL
    └── 📂 GitHub Repos: telegram-task-agent
 
-2. 📋 Mis Agentes
-   └── 🤖 TEL Deploy Agent
-       ├── 📋 Ver Tareas Linear (TEL-11, TEL-12...)
-       │   ├── ▶️ Ejecutar Automático (background)
-       │   └── 💬 Ejecutar con Prompt
-       └── 📊 Estado: [Idle/Working/Completed]
+2. 🚀 Ejecutar Tarea
+   ├── Background: Claude ejecuta automáticamente
+   └── Interactive: Chat directo con Claude CLI
 
-3. 🔄 Ejecución Background
-   ├── Agente analiza tarea Linear + código GitHub
-   ├── Genera plan de ejecución específico
-   ├── Ejecuta en Docker en VPS
-   └── Reporta progreso en tiempo real
+3. 💬 Conversación Interactive
+   TÚ: "Deploy solo el backend"
+   CLAUDE: "Analicé el código. ¿Qué configuración usar?"
+   TÚ: "Usa staging database"
+   CLAUDE: "Perfecto. Backend deployado. ¿Algo más?"
+   TÚ: "terminar"
 ```
 
-## Stack Tecnológico Actual
+## 🏗️ **Stack Tecnológico - PRODUCCIÓN**
 
-### **Backend Core:**
-- **Orchestrator**: Node.js + Telegraf.js
-- **Task Atomizer**: Claude CLI (ZERO costos API - usa plan Pro)
-- **Agent Manager**: SQLite con gestión de estados
-- **Docker Runtime**: Containers aislados por tarea en VPS
+### **✅ Sistema Desplegado:**
+- **Bot**: Node.js + Telegraf.js corriendo en VPS
+- **Claude CLI**: v1.0.65 autenticado (sin API key)
+- **Docker**: Containers aislados por tarea + sesiones persistentes
+- **VPS**: Hetzner 5.75.171.46 - Ubuntu 24.04.2 LTS
 
-### **Integraciones:**
-- **Linear API**: GraphQL completa para proyectos y tareas ✅
-- **GitHub API**: REST + Octokit.js para repos y código ✅  
-- **Claude Integration**: CLI con contexto completo del proyecto ✅
-- **VPS Deployment**: Hetzner con Docker orchestration ✅
+### **✅ Integraciones Funcionales:**
+- **Linear API**: Proyectos y tareas sincronizados
+- **GitHub API**: Repositorios y código accesibles
+- **Claude CLI**: Ejecución real (no mock) con contexto completo
+- **Conversaciones**: Sesiones persistentes con session-id
 
-## Quick Start
-```bash
-# Instalar dependencias
-npm install
+## 🚀 **Sistema en Producción - ACTIVO**
 
-# Configurar variables de entorno
-cp .env.example .env
-# Editar .env con tus tokens
+### **Bot Telegram:** `@terminaitoragentbot`
+- **Estado**: ✅ Online 24/7 en VPS
+- **Proceso**: PM2 (PID: 59519) - Auto-restart habilitado
+- **Logs**: `ssh root@5.75.171.46 "pm2 logs telegram-task-agent -f"`
 
-# Ejecutar
-npm start
-```
-
-## VPS de Producción
+### **VPS Hetzner:**
 ```
 IP: 5.75.171.46
 OS: Ubuntu 24.04.2 LTS
-Acceso: SSH (puerto 22)
-Servicios: Docker, Node.js, Claude CLI (autenticado)
-Estado: ✅ Configurado y listo para deploy
+Acceso: SSH root@5.75.171.46
+Estado: ✅ Completamente configurado
 ```
 
-### **Servicios Instalados en VPS:**
-- **Claude CLI v1.0.64**: Autenticado con cuenta Pro (sin API key)
-- **Docker**: Para aislamiento de agentes
-- **Node.js**: Runtime principal del bot
-- **PM2**: Process manager para mantener bot activo 24/7
+### **Servicios Activos:**
+- **Claude CLI v1.0.65**: Autenticado (sin API key)
+- **Docker**: Imagen claude-agent:latest lista
+- **Node.js v18**: Runtime del bot
+- **PM2**: Proceso manager con auto-restart
 
-## Variables de Entorno (.env)
+## ⚙️ **Configuración Actual (.env.production)**
 ```env
-TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
-LINEAR_API_KEY=your_linear_api_key
-GITHUB_TOKEN=your_github_token
-DATABASE_PATH=./data/agents.db
-DOCKER_WORKSPACE_PATH=./workspace
-MAX_DOCKER_INSTANCES=10
+TELEGRAM_BOT_TOKEN=your_bot_token_here
+LINEAR_API_KEY=your_linear_api_key_here
+GITHUB_TOKEN=your_github_token_here
 
-# Claude Configuration 
-CLAUDE_USE_API=false  # Claude CLI autenticado, no necesita API key
+# Sistema en Producción
+NODE_ENV=production
+DOCKER_MOCK_MODE=false  # Modo REAL - Docker + Claude CLI
+DATABASE_PATH=/root/telegram-task-agent/data/tasks.db
+DOCKER_WORKSPACE_PATH=/root/telegram-task-agent/workspace
+MAX_DOCKER_INSTANCES=5
 ```
 
-## Comandos del Sistema
+## 💬 **Interfaz de Usuario - Telegram**
 
-### **Interfaz Principal:**
+### **Comando Principal:** `/start`
 ```
 🤖 Background Agents Manager
 
 📊 Tu Dashboard:
-• Agentes creados: 3
-• Agentes activos: 1  
+• Agentes creados: X
+• Agentes activos: X
 • VPS: Conectado ✅
 
 ┌─────────────────────────┐
 │ 🆕 Crear Agente         │
 │ 📋 Mis Agentes          │
-│ 📊 Dashboard           │
-│ ⚙️ Configuración       │
 │ ❓ ¿Cómo funciona?      │
 └─────────────────────────┘
 ```
 
-### **Flujo Crear Agente:**
+### **Flujo: Crear Agente**
 ```
-1. 🆕 Crear Agente
-   ├── 📛 Nombre del agente
-   ├── 🔗 Seleccionar Linear Project
-   ├── 📂 Seleccionar GitHub Repos
-   └── ✅ Crear Agente
+1. Click "🆕 Crear Agente"
+   ├── 📛 Nombre: "TEL Agent"
+   ├── 🔗 Linear Project: TEL
+   └── 📂 GitHub Repos: telegram-task-agent
 
-2. Resultado:
-   🤖 "TEL Deploy Agent" creado
-   📋 Linear: TEL (15 tareas disponibles)
-   📂 Repos: telegram-task-agent (main)
-   📊 Estado: Idle - Listo para trabajar
+2. Agente Creado ✅
+   📋 Linear: TEL (X tareas disponibles)
+   📊 Estado: Idle - Listo para ejecutar
 ```
 
-### **Dashboard Mis Agentes:**
+### **Flujo: Ejecutar Tarea**
 ```
-📋 MIS AGENTES (3):
-
-🤖 TEL Deploy Agent
-├── 📊 Estado: 🟢 Ejecutando TEL-11 (45% completado)
-├── 🔗 Linear: TEL (15 tareas)
-├── 📂 Repos: telegram-task-agent
-└── [⏸️ Pausar] [📋 Ver Tareas] [⚙️ Config]
-
-🤖 Frontend Agent DEV  
-├── 📊 Estado: 🔵 Idle
-├── 🔗 Linear: DEV (8 tareas)
-├── 📂 Repos: frontend-app, ui-components
-└── [▶️ Ejecutar] [📋 Ver Tareas] [🗑️ Eliminar]
-
-🤖 API Agent PROD
-├── 📊 Estado: 🟠 Esperando input usuario
-├── 🔗 Linear: PROD (3 tareas)
-├── 📂 Repos: api-backend
-└── [💬 Responder] [📋 Ver Tareas] [⚙️ Config]
+1. Click "📋 Mis Agentes" → Seleccionar agente
+2. Click "🚀 Ejecutar Background" → Seleccionar tarea
+3. Choose:
+   ├── Background: Claude ejecuta automáticamente
+   └── Interactive: Chat directo con Claude
 ```
 
-## Modos de Ejecución
+## 🎯 **Modos de Ejecución - IMPLEMENTADOS**
 
-### **1. 🔄 Modo Background (Automático):**
+### **🤖 Modo Background (COMPLETAMENTE AUTOMÁTICO):**
 ```
-Usuario: Click "▶️ Ejecutar Automático"
-Sistema: 
-├── Analiza tarea TEL-11: "Deploy en Hetzner VPS"
-├── Lee código de telegram-task-agent  
-├── Detecta: Node.js + Telegraf + Docker + Hetzner
-├── Genera plan específico para TU stack
-├── Ejecuta en Docker container en VPS
-├── Reporta progreso cada 30s
-└── Notifica cuando completa
+Usuario: Click "🚀 Ejecutar Background" → Selecciona tarea
+Claude CLI: 
+├── 🔍 Analiza tarea Linear + codebase automáticamente
+├── 📋 Genera plan específico para tu stack
+├── ⚡ Ejecuta TODOS los cambios sin preguntar
+├── 🧪 Ejecuta tests y verifica funcionamiento
+├── 📝 Hace commits con mensajes descriptivos
+└── ✅ Completa tarea sin intervención humana
 
-Ventajas:
-✅ Completamente autónomo
-✅ Optimizado para tu código específico  
+Características:
+✅ ZERO intervención humana
 ✅ Ejecuta mientras duermes
-✅ Múltiples agentes en paralelo
+✅ Claude toma TODAS las decisiones
+✅ Completa tareas end-to-end
 ```
 
-### **2. 💬 Modo Interactive (Con Prompt):**
+### **💬 Modo Interactive (CONVERSACIÓN REAL):**
 ```
-Usuario: Click "💬 Ejecutar con Prompt"
-Sistema: "¿Cómo quieres que ejecute TEL-11?"
-Usuario: "Deploy solo el backend, sin frontend. Usa staging database"
-Sistema:
-├── Ajusta plan según tu prompt
-├── Ejecuta con modificaciones específicas
-├── Te consulta si encuentra ambigüedades  
-└── Reporta progreso personalizado
+Usuario: Click "💬 Ejecutar Interactive" → Prompt inicial
+Claude: "Analicé el código. Veo que tienes Node.js + Docker. ¿Qué quieres modificar?"
+Usuario: "Solo deploy el backend sin tocar frontend"
+Claude: "Perfecto. ¿Usar configuración de staging o producción?"
+Usuario: "Staging por ahora"
+Claude: "Listo. Backend deployado en staging. ¿Quieres que actualice la documentación?"
+Usuario: "Sí, y también agrega logs de debug"
+Claude: "Hecho. Logs agregados y docs actualizadas. ¿Algo más?"
+Usuario: "terminar"
+Sistema: ✅ Conversación finalizada
 
-Ventajas:
-✅ Control granular
-✅ Personalización específica
-✅ Iteración colaborativa
-✅ Aprendizaje del contexto
+Características:
+✅ Chat REAL con Claude CLI
+✅ Conversación persistente 
+✅ Múltiples mensajes de ida y vuelta
+✅ Claude mantiene contexto completo
+✅ Terminas cuando quieras con "terminar"
 ```
 
-## Base de Datos
+## 💾 **Base de Datos - SQLite**
 
 ```sql
--- Agentes background
+-- Agentes activos
 CREATE TABLE agents (
   id INTEGER PRIMARY KEY,
   user_id TEXT NOT NULL,
   name TEXT NOT NULL,
   linear_project_id TEXT NOT NULL,
   github_repos TEXT NOT NULL, -- JSON array
-  status TEXT DEFAULT 'idle', -- idle, working, completed, error
-  current_task_id TEXT NULL,
-  progress INTEGER DEFAULT 0
+  status TEXT DEFAULT 'idle'
 );
 
--- Ejecuciones de tareas
+-- Ejecuciones y conversaciones
 CREATE TABLE task_executions (
   id INTEGER PRIMARY KEY,
   agent_id INTEGER NOT NULL,
   linear_task_id TEXT NOT NULL,
   execution_mode TEXT NOT NULL, -- 'background' or 'interactive'
-  user_prompt TEXT NULL, -- Para modo interactive
+  user_prompt TEXT NULL,
   status TEXT DEFAULT 'pending',
   docker_instance_id TEXT NULL,
-  progress INTEGER DEFAULT 0,
-  logs TEXT NULL -- JSON array de logs
+  session_id TEXT NULL -- Para conversaciones
 );
 ```
 
-## Ventajas Clave del Sistema
+## 🎉 **Sistema COMPLETAMENTE FUNCIONAL**
 
-### **🎯 Específico para tu Código:**
-- Claude analiza TU arquitectura específica
-- Genera tareas para TU stack tecnológico  
-- Considera TUS patrones y convenciones
-- Optimiza para TUS requisitos de deployment
+### **✅ Ventajas Implementadas:**
+- **Claude CLI Real**: Sin simulación, ejecución real
+- **Conversaciones Persistentes**: Chat bidireccional completo
+- **Containers Docker**: Aislamiento por tarea y por sesión
+- **Costo Zero**: Claude CLI usa tu plan Pro ($0 API calls)
+- **VPS Productivo**: Sistema 24/7 auto-restart
 
-### **🔄 Verdaderamente Background:**
-- Agentes trabajan mientras duermes
-- Múltiples agentes en paralelo
-- Ejecución aislada por container
-- Rollback automático en fallos
-
-### **💰 Costo Optimizado:**
-- Claude CLI = $0 USD (usa tu plan Pro)
-- VPS Hetzner = €8.90/mes  
-- GitHub API = Gratis
-- Linear API = Gratis
-- **Total**: <€10/mes para sistema completo
-
-### **🚀 Escalable y Robusto:**
-- Docker isolation por tarea
-- SQLite para persistencia local
-- Systemd para auto-restart
-- Error handling completo
-- Logs centralizados
+### **✅ Características Únicas:**
+- **Chat con Claude via Telegram**: Primera implementación real
+- **Sesiones UUID**: Cada conversación mantiene contexto
+- **Modo Completamente Automático**: Claude decide todo
+- **Containers Compartidos**: Para conversaciones largas
 
 ## 🚀 Próximos Pasos - Roadmap de Deployment
 

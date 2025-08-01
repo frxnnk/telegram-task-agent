@@ -1,16 +1,26 @@
-const { Octokit } = require('@octokit/rest');
-
 class GitHubManager {
   constructor(token) {
     this.token = token;
-    this.octokit = new Octokit({
-      auth: token
-    });
+    this.octokit = null;
     this.repositoryCache = new Map(); // Cache para estructura de repos
+    this.initializeOctokit();
+  }
+
+  async initializeOctokit() {
+    try {
+      const { Octokit } = await import('@octokit/rest');
+      this.octokit = new Octokit({
+        auth: this.token
+      });
+    } catch (error) {
+      console.error('Error initializing Octokit:', error);
+      throw error;
+    }
   }
 
   async testConnection() {
     try {
+      if (!this.octokit) await this.initializeOctokit();
       const { data: user } = await this.octokit.rest.users.getAuthenticated();
       return {
         username: user.login,
@@ -28,6 +38,7 @@ class GitHubManager {
 
   async getRepositories(type = 'all', sort = 'updated', per_page = 100) {
     try {
+      if (!this.octokit) await this.initializeOctokit();
       const { data: repos } = await this.octokit.rest.repos.listForAuthenticatedUser({
         type, // 'all', 'public', 'private'
         sort, // 'created', 'updated', 'pushed', 'full_name'

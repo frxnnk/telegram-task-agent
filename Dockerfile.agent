@@ -1,49 +1,160 @@
-# Dockerfile para Agentes Background con Claude CLI
-FROM ubuntu:22.04
+# =================================================================
+# Dockerfile para Agentes Background con Claude CLI - TESTING INTEGRAL
+# Optimizado para VPS Hetzner con Ubuntu 24.04.2 LTS
+# =================================================================
+
+FROM ubuntu:24.04
 
 # Evitar prompts interactivos durante instalación
 ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=UTC
 
-# Instalar dependencias básicas
+# Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     curl \
+    wget \
     git \
     nodejs \
     npm \
     python3 \
     python3-pip \
+    python3-venv \
     vim \
     nano \
+    jq \
+    htop \
     ca-certificates \
     gnupg \
     lsb-release \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Crear directorio para montar Claude CLI desde host
-RUN mkdir -p /usr/local/bin
+# Crear directorios estándar
+RUN mkdir -p /usr/local/bin /workspace /logs /tmp/agent
+RUN chmod 755 /workspace /logs /tmp/agent
 
-# Configurar PATH para Claude CLI (se montará desde host)
-ENV PATH="/usr/local/bin:$PATH"
+# Configurar PATH para binarios montados desde host
+ENV PATH="/usr/local/bin:/usr/bin:/bin"
 
-# Crear directorios de trabajo
-RUN mkdir -p /workspace /logs
-RUN chmod 755 /workspace /logs
+# Variables de entorno para agente
+ENV AGENT_MODE="production"
+ENV CLAUDE_CLI_PATH="/usr/local/bin/claude"
+ENV WORKSPACE_PATH="/workspace"
 
-# Verificar instalación de Claude CLI
-RUN claude --version || echo "Claude CLI instalado pero requiere autenticación"
+# Script de entrada mejorado para testing integral
+RUN cat > /entrypoint.sh << 'EOF'
+#!/bin/bash
+set -e
 
-# Script de entrada para verificar autenticación
-RUN echo '#!/bin/bash\n\
-echo "🤖 Agente Background iniciado"\n\
-echo "📂 Workspace: $(pwd)"\n\
-echo "🔐 Verificando Claude CLI..."\n\
-claude auth status || echo "⚠️  Claude CLI requiere autenticación (se montará desde host)"\n\
-echo "✅ Agente listo para ejecutar tareas"\n\
-exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+echo "🤖 ==================================================================="
+echo "🤖 AGENTE BACKGROUND - TESTING INTEGRAL"
+echo "🤖 ==================================================================="
+echo "📂 Workspace: $(pwd)"
+echo "🕐 Iniciado: $(date)"
+echo "💾 Memoria disponible: $(free -h | grep Mem | awk '{print $7}')"
+echo "🖥️  CPU cores: $(nproc)"
 
-# Punto de entrada por defecto
+# Verificar montajes críticos
+echo "🔍 Verificando montajes..."
+if [ -f "/usr/local/bin/claude" ]; then
+    echo "✅ Claude CLI binario encontrado"
+    ls -la /usr/local/bin/claude
+else
+    echo "❌ Claude CLI binario NO encontrado en /usr/local/bin/claude"
+    echo "   Verificar que el volume mount esté configurado correctamente"
+fi
+
+if [ -d "/root/.claude" ]; then
+    echo "✅ Claude CLI auth directory encontrado"
+    ls -la /root/.claude/
+else
+    echo "❌ Claude CLI auth directory NO encontrado en /root/.claude"
+    echo "   Verificar que el volume mount esté configurado correctamente"
+fi
+
+# Verificar Claude CLI
+echo "🔐 Verificando autenticación Claude CLI..."
+if command -v claude >/dev/null 2>&1; then
+    echo "✅ Claude CLI disponible en PATH"
+    if claude auth status >/dev/null 2>&1; then
+        echo "✅ Claude CLI autenticado correctamente"
+        claude auth status
+    else
+        echo "⚠️  Claude CLI no autenticado - verificar montaje de /root/.claude"
+        echo "   Status: $(claude auth status 2>&1 || echo 'Error')"
+    fi
+else
+    echo "❌ Claude CLI no disponible en PATH"
+    echo "   PATH actual: $PATH"
+    echo "   Binarios en /usr/local/bin: $(ls -la /usr/local/bin/ || echo 'ninguno')"
+fi
+
+# Verificar contexto de tarea
+echo "📋 Verificando contexto de tarea..."
+if [ -f "task-context.json" ]; then
+    echo "✅ Contexto de tarea encontrado:"
+    jq -r '.title // "Sin título"' task-context.json 2>/dev/null || echo "Error leyendo contexto"
+else
+    echo "⚠️  No se encontró task-context.json"
+fi
+
+# Verificar repositorios
+if [ -d "repositories" ]; then
+    echo "✅ Directorio de repositorios encontrado:"
+    ls -la repositories/ | head -5
+else
+    echo "⚠️  No se encontraron repositorios clonados"
+fi
+
+# Verificar script de ejecución
+if [ -f "execute.sh" ]; then
+    echo "✅ Script de ejecución encontrado"
+    chmod +x execute.sh
+else
+    echo "⚠️  No se encontró execute.sh"
+fi
+
+echo "🚀 Agente listo para ejecutar tareas"
+echo "📋 Ejecutando comando: $@"
+
+# Ejecutar comando pasado como parámetros
+exec "$@"
+EOF
+
+RUN chmod +x /entrypoint.sh
+
+# Crear script de testing específico
+RUN cat > /test-agent.sh << 'EOF'
+#!/bin/bash
+echo "🧪 INICIANDO TEST INTEGRAL DEL AGENTE"
+
+# Test 1: Claude CLI disponibilidad
+echo "Test 1: Claude CLI disponibilidad"
+which claude && echo "✅ Claude en PATH" || echo "❌ Claude NO en PATH"
+
+# Test 2: Autenticación
+echo "Test 2: Autenticación Claude"
+claude auth status && echo "✅ Autenticado" || echo "❌ No autenticado"
+
+# Test 3: Funcionalidad básica
+echo "Test 3: Funcionalidad básica"
+echo "Hello Claude!" | claude --print && echo "✅ Funciona" || echo "❌ Error"
+
+# Test 4: Contexto de workspace
+echo "Test 4: Contexto disponible"
+ls -la . && echo "✅ Workspace OK" || echo "❌ Workspace error"
+
+echo "🧪 TEST COMPLETADO"
+EOF
+
+RUN chmod +x /test-agent.sh
+
+# Punto de entrada y comando por defecto
 WORKDIR /workspace
 ENTRYPOINT ["/entrypoint.sh"]
-
-# Comando por defecto (se puede sobrescribir)
 CMD ["bash"]
+
+# Metadata para debugging
+LABEL version="1.0.0"
+LABEL description="Claude Agent Container for Integral Testing"
+LABEL maintainer="Telegram Task Agent System"
