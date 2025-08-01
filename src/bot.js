@@ -1916,8 +1916,9 @@ bot.action(/^agent_execute_background_(.+)$/, async (ctx) => {
       taskMessage += `${priority}**${escapedTitle}**\n`;
       taskMessage += `└ Estado: ${escapedState}\n\n`;
       
+      const buttonText = `▶️ ${shortTitle.length > 25 ? shortTitle.substring(0, 25) + '...' : shortTitle}`;
       buttons.push([
-        { text: '▶️ Ejecutar Background', callback_data: `execute_background_${agent.id}_${task.id}` },
+        { text: buttonText, callback_data: `execute_background_${agent.id}_${task.id}` },
       ]);
     });
     
@@ -3102,7 +3103,7 @@ async function monitorBackgroundExecution(dockerInstance, agent, task, execution
     try {
       checkCount++;
       
-      // Check container status every 30 seconds
+      // Check container status every 10 seconds  
       const containerStatus = await docker.getInstanceStatus(instanceId);
       
       if (!containerStatus) {
@@ -3110,21 +3111,32 @@ async function monitorBackgroundExecution(dockerInstance, agent, task, execution
         return;
       }
       
-      // Send periodic updates every few checks (every ~2 minutes)
-      if (checkCount % 4 === 0) {
-        const timeElapsed = Math.floor((Date.now() - lastUpdateTime) / 1000 / 60);
-        
-        await ctx.editMessageText(`🔄 *Agente ejecutándose...*
+      // Get fresh logs every check
+      const logs = await docker.getInstanceLogs(instanceId);
+      const recentLogs = logs ? logs.split('\n').slice(-8).join('\n') : 'Sin logs disponibles';
+      const timeElapsed = Math.floor((Date.now() - lastUpdateTime) / 1000 / 60);
+      
+      // Send updates every check (every 10 seconds)
+      await ctx.editMessageText(`🔄 *Agente ejecutándose...*
 
 🐳 **Container:** ${dockerInstance.containerName}
-⏱️ **Tiempo:** ${timeElapsed}+ minutos
+⏱️ **Tiempo:** ${timeElapsed}+ minutos  
 📊 **Estado:** ${containerStatus.status}
 
-⏳ *Claude CLI está trabajando automáticamente...*
-💬 Te notificaré cuando termine.`, {
-          parse_mode: 'Markdown'
-        });
-      }
+📝 **Logs recientes:**
+\`\`\`
+${recentLogs.length > 400 ? recentLogs.substring(0, 400) + '...' : recentLogs}
+\`\`\`
+
+⏳ *Claude CLI trabajando automáticamente...*`, {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [[
+            { text: '⏸️ Pausar Agente', callback_data: `pause_agent_${instanceId}` },
+            { text: '📋 Logs Completos', callback_data: `full_logs_${instanceId}` }
+          ]]
+        }
+      });
       
       // If container finished (exited)
       if (containerStatus.status === 'exited' || containerStatus.status === 'completed') {
@@ -3177,8 +3189,60 @@ ${logs?.slice(-500) || 'Ver logs completos con /logs command'}
       console.error('Error monitoring background execution:', error);
       // Continue monitoring despite errors
     }
-  }, 30000); // Check every 30 seconds
+  }, 10000); // Check every 10 seconds
 }
+
+// Handle pause agent
+bot.action(/^pause_agent_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery('⏸️ Pausando agente...');
+  
+  try {
+    const instanceId = ctx.match[1];
+    const result = await docker.killInstance(instanceId);
+    
+    await ctx.editMessageText(`⏸️ *Agente pausado*
+
+🐳 **Container:** ${instanceId}
+✅ **Estado:** Detenido exitosamente
+
+El agente ha sido pausado. Puedes crear un nuevo agente para continuar trabajando.`, {
+      parse_mode: 'Markdown'
+    });
+    
+  } catch (error) {
+    console.error('Error pausing agent:', error);
+    await ctx.editMessageText('❌ *Error pausando agente*\n\nNo se pudo detener el contenedor.', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// Handle full logs
+bot.action(/^full_logs_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery('📋 Obteniendo logs...');
+  
+  try {
+    const instanceId = ctx.match[1];
+    const fullLogs = await docker.getInstanceLogs(instanceId);
+    
+    const logsText = fullLogs || 'No hay logs disponibles';
+    const truncatedLogs = logsText.length > 3500 ? logsText.substring(logsText.length - 3500) + '\n\n[Logs truncados - mostrando últimas 3500 chars]' : logsText;
+    
+    await ctx.reply(`📋 *Logs Completos*
+
+\`\`\`
+${truncatedLogs}
+\`\`\``, {
+      parse_mode: 'Markdown'
+    });
+    
+  } catch (error) {
+    console.error('Error getting full logs:', error);
+    await ctx.reply('❌ *Error obteniendo logs*\n\nNo se pudieron recuperar los logs del contenedor.', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
 
 async function startInteractiveTaskExecution(agent, task, execution, userPrompt) {
   console.log(`🚀 Starting interactive execution for task ${task.id} with prompt: ${userPrompt}`);
