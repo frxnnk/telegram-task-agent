@@ -551,18 +551,35 @@ executeTask();
       cwd: taskDir
     });
 
-    // Capturar logs en tiempo real
+    // Capturar logs en tiempo real con mejor handling
     let allLogs = '';
+    
     process.stdout.on('data', (data) => {
       const logLine = data.toString();
       allLogs += logLine;
-      console.log(`📋 Container ${containerName}: ${logLine.trim()}`);
+      // Log cada línea por separado para mejor debugging
+      logLine.split('\n').forEach(line => {
+        if (line.trim()) {
+          console.log(`📋 Container ${containerName}: ${line.trim()}`);
+        }
+      });
     });
 
     process.stderr.on('data', (data) => {
       const errorLine = data.toString();
       allLogs += errorLine;
-      console.log(`⚠️ Container ${containerName} stderr: ${errorLine.trim()}`);
+      errorLine.split('\n').forEach(line => {
+        if (line.trim()) {
+          console.log(`⚠️ Container ${containerName} stderr: ${line.trim()}`);
+        }
+      });
+    });
+
+    // Manejar cuando el proceso termina
+    process.on('exit', (code) => {
+      console.log(`📊 Container ${containerName} exited with code ${code}`);
+      instance.status = 'completed';
+      instance.exitCode = code;
     });
 
     const instance = {

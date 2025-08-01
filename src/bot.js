@@ -3143,8 +3143,8 @@ ${escapedLogs}
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [[
-              { text: '⏸️ Pausar Agente', callback_data: `pause_agent_${instanceId}` },
-              { text: '📋 Logs Completos', callback_data: `full_logs_${instanceId}` }
+              { text: '⏸️ Pausar', callback_data: `pause_${instanceId.substring(0, 20)}` },
+              { text: '📋 Logs', callback_data: `logs_${instanceId.substring(0, 20)}` }
             ]]
           }
         });
@@ -3334,7 +3334,7 @@ async function generateWorkSummary(logs, task, dockerInstance) {
 }
 
 // Handle pause agent
-bot.action(/^pause_agent_(.+)$/, async (ctx) => {
+bot.action(/^pause_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery('⏸️ Pausando agente...');
   
   try {
@@ -3359,7 +3359,7 @@ El agente ha sido pausado. Puedes crear un nuevo agente para continuar trabajand
 });
 
 // Handle full logs
-bot.action(/^full_logs_(.+)$/, async (ctx) => {
+bot.action(/^logs_(.+)$/, async (ctx) => {
   await ctx.answerCbQuery('📋 Obteniendo logs...');
   
   try {
