@@ -337,15 +337,23 @@ class AgentManager {
     return new Promise((resolve, reject) => {
       this.db.serialize(() => {
         // Eliminar ejecuciones relacionadas
-        this.db.run('DELETE FROM task_executions WHERE agent_id = ?', [agentId]);
-        
-        // Eliminar agente
-        this.db.run('DELETE FROM agents WHERE id = ?', [agentId], function(err) {
+        this.db.run('DELETE FROM task_executions WHERE agent_id = ?', [agentId], (err) => {
           if (err) {
-            reject(err);
-          } else {
-            resolve(this.changes > 0);
+            console.error('Error deleting task executions:', err);
+            return resolve({ success: false, error: err.message });
           }
+          
+          // Eliminar agente
+          this.db.run('DELETE FROM agents WHERE id = ?', [agentId], function(err) {
+            if (err) {
+              console.error('Error deleting agent:', err);
+              resolve({ success: false, error: err.message });
+            } else if (this.changes === 0) {
+              resolve({ success: false, error: 'Agente no encontrado' });
+            } else {
+              resolve({ success: true });
+            }
+          });
         });
       });
     });

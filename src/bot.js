@@ -3100,6 +3100,219 @@ Focus on understanding the existing codebase and following established patterns.
   }
 }
 
+// Handle delete agent
+bot.action(/^delete_agent_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    // Show confirmation dialog
+    await ctx.editMessageText(
+      `🗑️ *Eliminar Agente*\n\n` +
+      `¿Estás seguro de que quieres eliminar este agente?\n\n` +
+      `🤖 **Agente:** ${escapeMarkdown(agent.name)}\n` +
+      `📋 **Proyecto:** ${escapeMarkdown(agent.linear_project_id)}\n` +
+      `📊 **Estado:** ${escapeMarkdown(agent.status)}\n\n` +
+      `⚠️ *Esta acción no se puede deshacer*`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '✅ Sí, Eliminar', callback_data: `confirm_delete_agent_${agentId}` },
+              { text: '❌ Cancelar', callback_data: `view_agent_${agentId}` }
+            ]
+          ]
+        }
+      }
+    );
+    
+  } catch (error) {
+    console.error('Error showing delete confirmation:', error);
+    await ctx.editMessageText('❌ *Error al procesar eliminación*', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// Handle confirmed delete agent
+bot.action(/^confirm_delete_agent_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    // Delete the agent
+    const result = await agentManager.deleteAgent(agentId);
+    
+    if (result.success) {
+      await ctx.editMessageText(
+        `✅ *Agente Eliminado*\n\n` +
+        `🤖 **Agente:** ${escapeMarkdown(agent.name)}\n` +
+        `📋 **Proyecto:** ${escapeMarkdown(agent.linear_project_id)}\n\n` +
+        `El agente ha sido eliminado permanentemente.`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 Volver al Menú', callback_data: 'my_agents' }]
+            ]
+          }
+        }
+      );
+    } else {
+      await ctx.editMessageText(
+        `❌ *Error eliminando agente*\n\n${result.error}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 Volver al Agente', callback_data: `view_agent_${agentId}` }]
+            ]
+          }
+        }
+      );
+    }
+    
+  } catch (error) {
+    console.error('Error deleting agent:', error);
+    await ctx.editMessageText('❌ *Error al eliminar agente*', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// Handle pause agent
+bot.action(/^agent_pause_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    if (agent.status !== 'running') {
+      return ctx.editMessageText(
+        `⚠️ *No se puede pausar*\n\n` +
+        `El agente no está ejecutándose actualmente.\n\n` +
+        `📊 **Estado actual:** ${escapeMarkdown(agent.status)}`,
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '🔙 Volver al Agente', callback_data: `view_agent_${agentId}` }]
+            ]
+          }
+        }
+      );
+    }
+    
+    // Try to kill the running Docker instance
+    let pauseMessage = `⏸️ *Pausando Agente*\n\n`;
+    pauseMessage += `🤖 **Agente:** ${escapeMarkdown(agent.name)}\n`;
+    pauseMessage += `📊 **Estado:** Pausando...\n\n`;
+    
+    if (agent.docker_instance_id) {
+      try {
+        await docker.killInstance(agent.docker_instance_id);
+        pauseMessage += `🐳 Container terminado: ${escapeMarkdown(agent.docker_instance_id)}\n`;
+      } catch (dockerError) {
+        console.error('Error killing Docker instance:', dockerError);
+        pauseMessage += `⚠️ Error terminando container (puede estar ya parado)\n`;
+      }
+    }
+    
+    // Update agent status to paused
+    await agentManager.updateAgentStatus(agentId, 'paused', null, null, 0);
+    
+    pauseMessage += `✅ Agente pausado exitosamente`;
+    
+    await ctx.editMessageText(pauseMessage, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '▶️ Reanudar', callback_data: `agent_resume_${agentId}` }],
+          [{ text: '🔙 Volver al Agente', callback_data: `view_agent_${agentId}` }]
+        ]
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error pausing agent:', error);
+    await ctx.editMessageText('❌ *Error al pausar agente*', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// Handle resume agent
+bot.action(/^agent_resume_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  try {
+    const agentId = parseInt(ctx.match[1]);
+    const userId = ctx.from.id.toString();
+    
+    const agent = await agentManager.getAgent(agentId);
+    
+    if (!agent || agent.user_id !== userId) {
+      return ctx.editMessageText('❌ *Agente no encontrado*', {
+        parse_mode: 'Markdown'
+      });
+    }
+    
+    // Update agent status to idle (ready to resume work)
+    await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
+    
+    await ctx.editMessageText(
+      `▶️ *Agente Reanudado*\n\n` +
+      `🤖 **Agente:** ${escapeMarkdown(agent.name)}\n` +
+      `📊 **Estado:** Listo para ejecutar\n\n` +
+      `El agente está listo para recibir nuevas tareas.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔙 Volver al Agente', callback_data: `view_agent_${agentId}` }]
+          ]
+        }
+      }
+    );
+    
+  } catch (error) {
+    console.error('Error resuming agent:', error);
+    await ctx.editMessageText('❌ *Error al reanudar agente*', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
 async function monitorBackgroundExecution(dockerInstance, agent, task, execution, ctx) {
   const instanceId = dockerInstance.instanceId;
   let lastUpdateTime = Date.now();
