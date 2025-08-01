@@ -862,9 +862,83 @@ class LinearManager {
     }
   }
 
-  // Mark task as completed in Linear
-  async markTaskAsCompleted(issueId) {
+  // Validate if task meets completion criteria
+  async validateTaskCompletion(issueId, executionResults) {
     try {
+      const task = await this.getIssueById(issueId);
+      if (!task) {
+        return { valid: false, error: 'Task not found' };
+      }
+
+      // Extract acceptance criteria from description
+      const acceptanceCriteria = this.extractAcceptanceCriteria(task.description);
+      
+      // Check if we have tangible results
+      if (!executionResults.filesChanged || executionResults.filesChanged.length === 0) {
+        return { 
+          valid: false, 
+          error: 'No files were created or modified',
+          criteria: acceptanceCriteria
+        };
+      }
+
+      // Check if we have a git commit
+      if (!executionResults.commitHash || !executionResults.commitUrl) {
+        return { 
+          valid: false, 
+          error: 'No git commit was created',
+          criteria: acceptanceCriteria
+        };
+      }
+
+      // Basic validation passed
+      return { 
+        valid: true, 
+        criteria: acceptanceCriteria,
+        results: executionResults
+      };
+
+    } catch (error) {
+      console.error('Error validating task completion:', error);
+      return { valid: false, error: error.message };
+    }
+  }
+
+  // Extract acceptance criteria from task description
+  extractAcceptanceCriteria(description) {
+    if (!description) return [];
+    
+    const criteriaRegex = /- \[([x\s])\] (.+)/gi;
+    const criteria = [];
+    let match;
+    
+    while ((match = criteriaRegex.exec(description)) !== null) {
+      criteria.push({
+        completed: match[1].toLowerCase() === 'x',
+        text: match[2].trim()
+      });
+    }
+    
+    return criteria;
+  }
+
+  // Mark task as completed in Linear with validation
+  async markTaskAsCompleted(issueId, executionResults = null) {
+    try {
+      // Validate completion if execution results provided
+      if (executionResults) {
+        const validation = await this.validateTaskCompletion(issueId, executionResults);
+        if (!validation.valid) {
+          console.warn(`⚠️ Task ${issueId} validation failed: ${validation.error}`);
+          return { 
+            success: false, 
+            error: validation.error,
+            criteria: validation.criteria,
+            requiresValidation: true
+          };
+        }
+      }
+
       const doneState = await this.getDoneStateForIssue(issueId);
       
       if (!doneState) {
@@ -876,7 +950,11 @@ class LinearManager {
       
       if (result.success) {
         console.log(`✅ Task ${issueId} marked as completed in Linear`);
-        return { success: true, newState: doneState.name };
+        return { 
+          success: true, 
+          newState: doneState.name,
+          validation: executionResults ? 'passed' : 'skipped'
+        };
       } else {
         console.error(`❌ Failed to update task ${issueId} in Linear`);
         return { success: false, error: 'Failed to update state' };

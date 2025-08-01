@@ -245,6 +245,23 @@ class AgentManager {
   }
 
   // Actualizar ejecución de tarea
+  // Get task execution by ID
+  async getTaskExecution(executionId) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        'SELECT * FROM task_executions WHERE id = ?',
+        [executionId],
+        (err, row) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve(row);
+          }
+        }
+      );
+    });
+  }
+
   async updateTaskExecution(executionId, status, progress = null, logs = null, dockerInstanceId = null) {
     return new Promise((resolve, reject) => {
       let query = 'UPDATE task_executions SET status = ?, updated_at = CURRENT_TIMESTAMP';

@@ -3713,22 +3713,85 @@ async function monitorTaskExecution(dockerInstanceId, executionId, agentId, line
         // Update agent status to idle
         await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
         
-        // Mark task as completed in Linear
+        // Send completion notification to user
+        await sendTaskCompletionNotification(executionId, agentId, linearTaskId);
+        
+        // Analyze execution changes and validate completion
         if (linearTaskId) {
           try {
-            console.log(`🔄 Marking Linear task ${linearTaskId} as completed...`);
-            const linearResult = await linear.markTaskAsCompleted(linearTaskId);
+            console.log(`🔍 Analyzing execution changes for task ${linearTaskId}...`);
+            
+            // Get workspace path for this execution
+            const workspacePattern = `agent_${agentId}_task_${linearTaskId}_*`;
+            const workspaceDirs = await docker.getWorkspaceDirs(workspacePattern);
+            
+            let executionResults = {
+              filesChanged: [],
+              commitHash: null,
+              commitUrl: null,
+              summary: 'Task execution completed'
+            };
+            
+            if (workspaceDirs.length > 0) {
+              const latestWorkspace = workspaceDirs[workspaceDirs.length - 1];
+              
+              // Get repository paths from agent context
+              const agent = await agentManager.getAgent(agentId);
+              const repositoryPaths = agent.github_repos ? 
+                JSON.parse(agent.github_repos).map(repo => repo.full_name) : [];
+              
+              executionResults = await docker.analyzeExecutionChanges(latestWorkspace, repositoryPaths);
+            }
+            
+            console.log(`🔄 Marking Linear task ${linearTaskId} as completed with validation...`);
+            const linearResult = await linear.markTaskAsCompleted(linearTaskId, executionResults);
             
             if (linearResult.success) {
               console.log(`✅ Linear task ${linearTaskId} marked as ${linearResult.newState}`);
-              logs += `\n✅ Task marked as completed in Linear`;
+              
+              // Build detailed completion message
+              let completionDetails = `✅ Task marked as completed in Linear`;
+              
+              if (executionResults.filesChanged.length > 0) {
+                completionDetails += `\n📁 Files changed: ${executionResults.filesChanged.length}`;
+                executionResults.filesChanged.slice(0, 5).forEach(file => {
+                  completionDetails += `\n  • ${file.status}: ${file.file} (${file.repository})`;
+                });
+                if (executionResults.filesChanged.length > 5) {
+                  completionDetails += `\n  • ... and ${executionResults.filesChanged.length - 5} more files`;
+                }
+              }
+              
+              if (executionResults.commitHash) {
+                completionDetails += `\n🔗 Commit: ${executionResults.commitHash.substring(0, 8)}`;
+                if (executionResults.commitUrl) {
+                  completionDetails += ` - ${executionResults.commitUrl}`;
+                }
+                if (executionResults.summary) {
+                  completionDetails += `\n💬 "${executionResults.summary}"`;
+                }
+              }
+              
+              logs += `\n${completionDetails}`;
+              
+            } else if (linearResult.requiresValidation) {
+              console.warn(`⚠️ Task ${linearTaskId} validation failed: ${linearResult.error}`);
+              logs += `\n⚠️ Task completed but validation failed: ${linearResult.error}`;
+              if (executionResults.filesChanged.length === 0) {
+                logs += `\n📋 No files were created or modified`;
+              }
+              if (!executionResults.commitHash) {
+                logs += `\n📋 No git commits were made`;
+              }
+              logs += `\n🔄 Task status not updated in Linear - requires manual review`;
             } else {
               console.warn(`⚠️ Failed to update Linear task ${linearTaskId}: ${linearResult.error}`);
-              logs += `\n⚠️ Warning: Could not update task status in Linear`;
+              logs += `\n⚠️ Warning: Could not update task status in Linear - ${linearResult.error}`;
             }
+            
           } catch (error) {
-            console.error('Error updating Linear task status:', error);
-            logs += `\n⚠️ Warning: Error updating task status in Linear`;
+            console.error('Error analyzing execution or updating Linear task status:', error);
+            logs += `\n⚠️ Warning: Error during completion analysis - ${error.message}`;
           }
         }
         
@@ -3761,6 +3824,105 @@ async function monitorTaskExecution(dockerInstanceId, executionId, agentId, line
     clearInterval(checkInterval);
     console.log(`⏰ Monitoring timeout for execution ${executionId}`);
   }, 3600000); // 1 hour
+}
+
+// Send detailed task completion notification to user
+async function sendTaskCompletionNotification(executionId, agentId, linearTaskId) {
+  try {
+    // Get execution details
+    const execution = await agentManager.getTaskExecution(executionId);
+    if (!execution) return;
+
+    // Get agent details
+    const agent = await agentManager.getAgent(agentId);
+    if (!agent) return;
+
+    // Get task details from Linear
+    const task = await linear.getIssueById(linearTaskId);
+    if (!task) return;
+
+    // Analyze execution changes
+    const workspacePattern = `agent_${agentId}_task_${linearTaskId}_*`;
+    const workspaceDirs = await docker.getWorkspaceDirs(workspacePattern);
+    
+    let executionResults = {
+      filesChanged: [],
+      commitHash: null,
+      commitUrl: null,
+      summary: 'Task completed'
+    };
+
+    if (workspaceDirs.length > 0) {
+      const latestWorkspace = workspaceDirs[workspaceDirs.length - 1];
+      const repositoryPaths = agent.github_repos ? 
+        JSON.parse(agent.github_repos).map(repo => repo.full_name) : [];
+      
+      executionResults = await docker.analyzeExecutionChanges(latestWorkspace, repositoryPaths);
+    }
+
+    // Build completion message
+    let message = `🎉 *Tarea Completada Exitosamente*\n\n`;
+    message += `📋 **Tarea:** ${escapeMarkdown(task.title)}\n`;
+    message += `🏷️ **ID:** ${escapeMarkdown(task.identifier)}\n`;
+    message += `🤖 **Agente:** ${escapeMarkdown(agent.name)}\n\n`;
+
+    // Add file changes summary
+    if (executionResults.filesChanged.length > 0) {
+      message += `📁 **Archivos Modificados (${executionResults.filesChanged.length}):**\n`;
+      
+      // Group by repository
+      const byRepo = {};
+      executionResults.filesChanged.forEach(file => {
+        if (!byRepo[file.repository]) byRepo[file.repository] = [];
+        byRepo[file.repository].push(file);
+      });
+
+      Object.entries(byRepo).forEach(([repo, files]) => {
+        message += `\n📂 *${escapeMarkdown(repo)}:*\n`;
+        files.slice(0, 5).forEach(file => {
+          const statusEmoji = {
+            'added': '➕',
+            'modified': '📝', 
+            'deleted': '❌',
+            'renamed': '🔄',
+            'created': '🆕'
+          }[file.status] || '📄';
+          message += `  ${statusEmoji} \`${escapeMarkdown(file.file)}\`\n`;
+        });
+        if (files.length > 5) {
+          message += `  📋 *... y ${files.length - 5} archivos más*\n`;
+        }
+      });
+    } else {
+      message += `📋 **Archivos:** Sin cambios detectados\n`;
+    }
+
+    // Add commit information
+    if (executionResults.commitHash) {
+      message += `\n🔗 **Commit:** \`${escapeMarkdown(executionResults.commitHash.substring(0, 8))}\`\n`;
+      if (executionResults.commitUrl) {
+        message += `🌐 [Ver commit en GitHub](${executionResults.commitUrl})\n`;
+      }
+      if (executionResults.summary) {
+        message += `💬 *"${escapeMarkdown(executionResults.summary)}"*\n`;
+      }
+    } else {
+      message += `\n📋 **Commit:** No se crearon commits\n`;
+    }
+
+    // Add completion status
+    message += `\n✅ **Estado en Linear:** Done\n`;
+    message += `⏱️ **Completado:** ${new Date().toLocaleString()}\n`;
+
+    // Send notification to user
+    await bot.telegram.sendMessage(execution.user_id || agent.user_id, message, {
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true
+    });
+
+  } catch (error) {
+    console.error('Error sending task completion notification:', error);
+  }
 }
 
 console.log('🚀 Starting Enhanced Telegram Task Agent...');

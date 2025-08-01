@@ -1108,6 +1108,181 @@ echo "✅ Agent execution completed successfully"
       return 'Error retrieving logs';
     }
   }
+
+  /**
+   * Analizar cambios realizados durante la ejecución
+   */
+  async analyzeExecutionChanges(taskDir, repositoryPaths = []) {
+    const results = {
+      filesChanged: [],
+      commitHash: null,
+      commitUrl: null,
+      summary: ''
+    };
+
+    try {
+      // Analizar cambios en Git para cada repositorio
+      for (const repoPath of repositoryPaths) {
+        const fullPath = path.join(taskDir, 'repositories', repoPath);
+        
+        if (!fs.existsSync(fullPath)) continue;
+
+        // Verificar estado de Git
+        const gitStatus = await this.runCommand(`cd "${fullPath}" && git status --porcelain`, { cwd: fullPath });
+        if (gitStatus.stdout) {
+          const changes = gitStatus.stdout.split('\n').filter(line => line.trim());
+          changes.forEach(change => {
+            const [status, filePath] = change.trim().split(/\s+/, 2);
+            results.filesChanged.push({
+              repository: repoPath,
+              file: filePath,
+              status: this.parseGitStatus(status),
+              fullPath: path.join(fullPath, filePath)
+            });
+          });
+        }
+
+        // Obtener último commit si hay cambios commitados
+        try {
+          const lastCommit = await this.runCommand(`cd "${fullPath}" && git log -1 --format="%H|%s"`, { cwd: fullPath });
+          if (lastCommit.stdout) {
+            const [hash, message] = lastCommit.stdout.trim().split('|');
+            results.commitHash = hash;
+            results.summary = message;
+            
+            // Intentar obtener URL del commit (GitHub)
+            const remoteUrl = await this.runCommand(`cd "${fullPath}" && git remote get-url origin`, { cwd: fullPath });
+            if (remoteUrl.stdout) {
+              const githubUrl = this.extractGitHubUrl(remoteUrl.stdout.trim());
+              if (githubUrl) {
+                results.commitUrl = `${githubUrl}/commit/${hash}`;
+              }
+            }
+          }
+        } catch (error) {
+          console.log('No commit found or git log failed');
+        }
+      }
+
+      // Analizar archivos en el workspace general
+      const workspaceFiles = await this.scanDirectoryChanges(taskDir);
+      results.filesChanged.push(...workspaceFiles);
+
+    } catch (error) {
+      console.error('Error analyzing execution changes:', error);
+    }
+
+    return results;
+  }
+
+  /**
+   * Escanear cambios en directorio de trabajo
+   */
+  async scanDirectoryChanges(dir) {
+    const changes = [];
+    
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (entry.isDirectory() && !['repositories', 'node_modules', '.git'].includes(entry.name)) {
+          const subChanges = await this.scanDirectoryChanges(path.join(dir, entry.name));
+          changes.push(...subChanges);
+        } else if (entry.isFile() && !entry.name.startsWith('.')) {
+          const filePath = path.join(dir, entry.name);
+          const stats = fs.statSync(filePath);
+          
+          // Considerar archivos creados en la última hora como nuevos
+          const isNew = (Date.now() - stats.birthtime.getTime()) < 3600000;
+          
+          changes.push({
+            repository: 'workspace',
+            file: entry.name,
+            status: isNew ? 'created' : 'modified',
+            fullPath: filePath,
+            size: stats.size
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error scanning directory changes:', error);
+    }
+
+    return changes;
+  }
+
+  /**
+   * Parsear estado de Git
+   */
+  parseGitStatus(status) {
+    const statusMap = {
+      'A': 'added',
+      'M': 'modified', 
+      'D': 'deleted',
+      'R': 'renamed',
+      'C': 'copied',
+      '??': 'untracked'
+    };
+    return statusMap[status] || 'unknown';
+  }
+
+  /**
+   * Extraer URL de GitHub de la URL del remote
+   */
+  extractGitHubUrl(remoteUrl) {
+    // git@github.com:user/repo.git -> https://github.com/user/repo
+    // https://github.com/user/repo.git -> https://github.com/user/repo
+    if (remoteUrl.includes('github.com')) {
+      return remoteUrl
+        .replace('git@github.com:', 'https://github.com/')
+        .replace(/\.git$/, '');
+    }
+    return null;
+  }
+
+  /**
+   * Ejecutar comando de sistema
+   */
+  async runCommand(command, options = {}) {
+    return new Promise((resolve, reject) => {
+      exec(command, options, (error, stdout, stderr) => {
+        if (error) {
+          resolve({ error, stdout: '', stderr });
+        } else {
+          resolve({ stdout, stderr });
+        }
+      });
+    });
+  }
+
+  /**
+   * Obtener directorios de workspace que coincidan con un patrón
+   */
+  async getWorkspaceDirs(pattern) {
+    try {
+      const workspaceDir = this.workspacePath;
+      if (!fs.existsSync(workspaceDir)) {
+        return [];
+      }
+
+      const entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
+      const matchingDirs = entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(workspaceDir, entry.name))
+        .filter(dir => {
+          const basename = path.basename(dir);
+          // Simple pattern matching - replace * with regex
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          return regex.test(basename);
+        })
+        .sort(); // Sort to get latest workspace last
+
+      return matchingDirs;
+    } catch (error) {
+      console.error('Error getting workspace directories:', error);
+      return [];
+    }
+  }
 }
 
 module.exports = DockerOrchestrator;
