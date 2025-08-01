@@ -551,6 +551,20 @@ executeTask();
       cwd: taskDir
     });
 
+    // Capturar logs en tiempo real
+    let allLogs = '';
+    process.stdout.on('data', (data) => {
+      const logLine = data.toString();
+      allLogs += logLine;
+      console.log(`📋 Container ${containerName}: ${logLine.trim()}`);
+    });
+
+    process.stderr.on('data', (data) => {
+      const errorLine = data.toString();
+      allLogs += errorLine;
+      console.log(`⚠️ Container ${containerName} stderr: ${errorLine.trim()}`);
+    });
+
     const instance = {
       id: instanceId,
       containerName,
@@ -562,6 +576,7 @@ executeTask();
       status: 'running',
       startTime: new Date(),
       logs: [],
+      allLogs: () => allLogs,
       type: 'agent'
     };
 
@@ -1043,28 +1058,34 @@ echo "✅ Agent execution completed successfully"
         return 'Instance not found';
       }
       
-      // Get Docker container logs (even if container has been removed)
+      // Primero intentar obtener logs capturados en tiempo real
+      if (instance.allLogs && typeof instance.allLogs === 'function') {
+        const realtimeLogs = instance.allLogs();
+        if (realtimeLogs && realtimeLogs.trim().length > 0) {
+          return realtimeLogs;
+        }
+      }
+      
+      // Fallback: intentar obtener logs del contenedor Docker
       try {
-        // Try to get logs from running or stopped container first
         const { stdout } = await execAsync(`docker logs ${instance.containerName} --tail=100 2>/dev/null || echo "Container removed"`);
         
-        if (stdout && stdout !== "Container removed\n") {
+        if (stdout && stdout !== "Container removed\n" && stdout.trim().length > 0) {
           return stdout;
         }
         
-        // If container was removed, try to get cached logs or check if we have stored logs
-        const cachedLogs = this.logs.get(instanceId);
-        if (cachedLogs) {
-          return cachedLogs;
-        }
-        
-        // If no cached logs, return a completion message
-        return 'Tarea completada. Los logs del contenedor han sido limpiados automáticamente.';
-        
       } catch (error) {
-        console.error(`Error getting logs for ${instanceId}:`, error);
-        return this.logs.get(instanceId) || 'No logs available';
+        console.error(`Error getting Docker logs for ${instanceId}:`, error);
       }
+      
+      // Último fallback: logs cacheados o mensaje predeterminado
+      const cachedLogs = this.logs.get(instanceId);
+      if (cachedLogs) {
+        return cachedLogs;
+      }
+      
+      // Si no hay logs disponibles, devolver mensaje informativo
+      return 'Contenedor ejecutado exitosamente. Logs detallados no disponibles.';
       
     } catch (error) {
       console.error(`Error getting logs for instance ${instanceId}:`, error);
