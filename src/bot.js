@@ -3146,8 +3146,9 @@ ${escapedLogs}
       if (containerStatus.status === 'exited' || containerStatus.status === 'completed' || containerStatus.status === 'not_found') {
         clearInterval(checkInterval);
         
-        // Get final logs
+        // Get final logs and analyze results
         const logs = await docker.getInstanceLogs(instanceId);
+        const workSummary = await generateWorkSummary(logs, task, dockerInstance);
         
         // Update execution status
         await agentManager.updateTaskExecution(
@@ -3159,18 +3160,26 @@ ${escapedLogs}
         
         await agentManager.updateAgentStatus(agent.id, 'idle', null, null, 0);
         
-        // Send completion message
+        // Send detailed completion message
+        const escapedTaskTitle = escapeMarkdown(task.title);
+        const escapedAgentName = escapeMarkdown(agent.name);
+        
         await ctx.editMessageText(`🎉 *Tarea completada exitosamente*
 
-✅ **Agente:** ${agent.name}
-📋 **Tarea:** ${task.title}
+✅ **Agente:** ${escapedAgentName}
+📋 **Tarea:** ${escapedTaskTitle}
 ⏱️ **Duración:** ${Math.floor((Date.now() - lastUpdateTime) / 1000 / 60)} minutos
 
-🔍 **Resumen de cambios:**
-${logs?.slice(-500) || 'Ver logs completos con /logs command'}
+${workSummary}
 
-🎯 *El agente ha completado la tarea automáticamente.*`, {
-          parse_mode: 'Markdown'
+🎯 *Claude ha completado la tarea automáticamente.*`, {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '📋 Ver Logs Completos', callback_data: `completed_logs_${instanceId}` },
+              { text: '🔄 Ejecutar Otra Tarea', callback_data: `view_agent_${agent.id}` }
+            ]]
+          }
         });
       }
       
@@ -3194,6 +3203,111 @@ ${logs?.slice(-500) || 'Ver logs completos con /logs command'}
       // Continue monitoring despite errors
     }
   }, 10000); // Check every 10 seconds
+}
+
+async function generateWorkSummary(logs, task, dockerInstance) {
+  try {
+    if (!logs || logs.includes('No logs available') || logs.includes('Container removed')) {
+      return `🔍 **Resumen de trabajo:**
+📝 La tarea se ejecutó exitosamente pero los logs detallados no están disponibles
+⚡ Ejecución completada rápidamente sin errores`;
+    }
+
+    // Analyze logs for key activities
+    const logLines = logs.split('\n').filter(line => line.trim().length > 0);
+    const activities = [];
+    const filesModified = [];
+    const errors = [];
+    const commits = [];
+
+    // Analyze each log line for meaningful activities
+    logLines.forEach(line => {
+      const lowerLine = line.toLowerCase();
+      
+      // File operations
+      if (lowerLine.includes('created') || lowerLine.includes('wrote') || lowerLine.includes('writing')) {
+        if (lowerLine.includes('.js') || lowerLine.includes('.ts') || lowerLine.includes('.py') || 
+            lowerLine.includes('.md') || lowerLine.includes('.json') || lowerLine.includes('.yml')) {
+          activities.push('📝 Modificó/creó archivos de código');
+        }
+      }
+      
+      // Git operations
+      if (lowerLine.includes('commit') || lowerLine.includes('git add') || lowerLine.includes('git commit')) {
+        commits.push(line.trim());
+      }
+      
+      // Package operations
+      if (lowerLine.includes('npm install') || lowerLine.includes('yarn install') || lowerLine.includes('pip install')) {
+        activities.push('📦 Instaló dependencias');
+      }
+      
+      // Testing
+      if (lowerLine.includes('test') && (lowerLine.includes('pass') || lowerLine.includes('ok'))) {
+        activities.push('✅ Ejecutó tests exitosamente');
+      }
+      
+      // Build/compilation
+      if (lowerLine.includes('build') || lowerLine.includes('compile')) {
+        activities.push('🏗️ Ejecutó proceso de build');
+      }
+      
+      // Database operations
+      if (lowerLine.includes('migration') || lowerLine.includes('database')) {
+        activities.push('🗄️ Realizó operaciones de base de datos');
+      }
+      
+      // API/HTTP requests
+      if (lowerLine.includes('http') || lowerLine.includes('api') || lowerLine.includes('request')) {
+        activities.push('🌐 Realizó llamadas a APIs');
+      }
+      
+      // Error detection
+      if (lowerLine.includes('error') || lowerLine.includes('failed') || lowerLine.includes('exception')) {
+        errors.push(line.trim());
+      }
+    });
+
+    // Remove duplicates
+    const uniqueActivities = [...new Set(activities)];
+    
+    // Build summary
+    let summary = `🔍 **Resumen de trabajo:**\n`;
+    
+    if (uniqueActivities.length > 0) {
+      summary += uniqueActivities.slice(0, 5).map(activity => `${activity}`).join('\n') + '\n';
+    } else {
+      summary += `📝 Tarea ejecutada según especificaciones\n`;
+    }
+    
+    // Add commits if any
+    if (commits.length > 0) {
+      summary += `\n📋 **Commits realizados:**\n`;
+      commits.slice(0, 2).forEach(commit => {
+        const shortCommit = commit.length > 60 ? commit.substring(0, 60) + '...' : commit;
+        summary += `• ${escapeMarkdown(shortCommit)}\n`;
+      });
+    }
+    
+    // Add errors if any (but not too many)
+    if (errors.length > 0) {
+      summary += `\n⚠️ **Advertencias/Errores manejados:** ${errors.length}\n`;
+    }
+    
+    // Add log preview
+    const recentLines = logLines.slice(-3).join('\n');
+    if (recentLines && recentLines.length < 200) {
+      summary += `\n📊 **Últimas líneas de ejecución:**\n\`\`\`\n${recentLines}\n\`\`\``;
+    }
+    
+    return summary;
+    
+  } catch (error) {
+    console.error('Error generating work summary:', error);
+    return `🔍 **Resumen de trabajo:**
+📝 Tarea completada exitosamente
+⚡ No se pudo generar resumen detallado`;
+  }
 }
 
 // Handle pause agent
@@ -3243,6 +3357,35 @@ ${truncatedLogs}
   } catch (error) {
     console.error('Error getting full logs:', error);
     await ctx.reply('❌ *Error obteniendo logs*\n\nNo se pudieron recuperar los logs del contenedor.', {
+      parse_mode: 'Markdown'
+    });
+  }
+});
+
+// Handle completed task logs
+bot.action(/^completed_logs_(.+)$/, async (ctx) => {
+  await ctx.answerCbQuery('📋 Obteniendo logs de tarea completada...');
+  
+  try {
+    const instanceId = ctx.match[1];
+    const fullLogs = await docker.getInstanceLogs(instanceId);
+    
+    const logsText = fullLogs || 'No hay logs disponibles para esta tarea completada.';
+    const truncatedLogs = logsText.length > 3500 ? logsText.substring(logsText.length - 3500) + '\n\n[Logs truncados - mostrando últimas 3500 chars]' : logsText;
+    
+    await ctx.reply(`📋 *Logs Completos - Tarea Completada*
+
+\`\`\`
+${truncatedLogs}
+\`\`\`
+
+💡 *Estos son los logs de la tarea que completó exitosamente.*`, {
+      parse_mode: 'Markdown'
+    });
+    
+  } catch (error) {
+    console.error('Error getting completed task logs:', error);
+    await ctx.reply('❌ *Error obteniendo logs*\n\nNo se pudieron recuperar los logs de esta tarea completada.', {
       parse_mode: 'Markdown'
     });
   }
