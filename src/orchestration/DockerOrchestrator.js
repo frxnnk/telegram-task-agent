@@ -527,7 +527,6 @@ executeTask();
       'docker', 'run',
       '--name', containerName,
       '--rm',
-      '-d',
       // Montar autenticación Claude CLI (solo lectura)
       '-v', '/root/.claude:/root/.claude:ro',
       // Montar binario Claude CLI (solo lectura)

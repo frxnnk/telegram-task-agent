@@ -3140,13 +3140,7 @@ ${escapedLogs}
 \`\`\`
 
 ⏳ *Claude CLI trabajando automáticamente...*`, {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '⏸️ Pausar', callback_data: `pause_${instanceId.substring(0, 20)}` },
-              { text: '📋 Logs', callback_data: `logs_${instanceId.substring(0, 20)}` }
-            ]]
-          }
+          parse_mode: 'Markdown'
         });
       } catch (messageError) {
         console.error('Error updating message during monitoring:', messageError);
@@ -3196,13 +3190,7 @@ ${escapedLogs}
 ${workSummary}
 
 🎯 *Claude ha completado la tarea automáticamente.*`, {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '📋 Ver Logs Completos', callback_data: `completed_logs_${instanceId}` },
-              { text: '🔄 Ejecutar Otra Tarea', callback_data: `view_agent_${agent.id}` }
-            ]]
-          }
+          parse_mode: 'Markdown'
         });
       }
       
