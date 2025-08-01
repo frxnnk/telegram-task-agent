@@ -3092,7 +3092,7 @@ Focus on understanding the existing codebase and following established patterns.
     );
     
     // Monitor execution progress
-    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id);
+    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id, task.id);
     
   } catch (error) {
     console.error('Failed to start background execution:', error);
@@ -3677,7 +3677,7 @@ Focus on the user's preferences while maintaining code quality and following est
     );
     
     // Monitor execution progress
-    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id);
+    monitorTaskExecution(dockerInstance.instanceId, execution.id, agent.id, task.id);
     
   } catch (error) {
     console.error('Failed to start interactive execution:', error);
@@ -3685,7 +3685,7 @@ Focus on the user's preferences while maintaining code quality and following est
   }
 }
 
-async function monitorTaskExecution(dockerInstanceId, executionId, agentId) {
+async function monitorTaskExecution(dockerInstanceId, executionId, agentId, linearTaskId = null) {
   console.log(`📊 Monitoring execution ${executionId} on Docker instance ${dockerInstanceId}`);
   
   const checkInterval = setInterval(async () => {
@@ -3712,6 +3712,25 @@ async function monitorTaskExecution(dockerInstanceId, executionId, agentId) {
         
         // Update agent status to idle
         await agentManager.updateAgentStatus(agentId, 'idle', null, null, 0);
+        
+        // Mark task as completed in Linear
+        if (linearTaskId) {
+          try {
+            console.log(`🔄 Marking Linear task ${linearTaskId} as completed...`);
+            const linearResult = await linear.markTaskAsCompleted(linearTaskId);
+            
+            if (linearResult.success) {
+              console.log(`✅ Linear task ${linearTaskId} marked as ${linearResult.newState}`);
+              logs += `\n✅ Task marked as completed in Linear`;
+            } else {
+              console.warn(`⚠️ Failed to update Linear task ${linearTaskId}: ${linearResult.error}`);
+              logs += `\n⚠️ Warning: Could not update task status in Linear`;
+            }
+          } catch (error) {
+            console.error('Error updating Linear task status:', error);
+            logs += `\n⚠️ Warning: Error updating task status in Linear`;
+          }
+        }
         
       } else if (instance.status === 'failed') {
         progress = 0;

@@ -840,6 +840,54 @@ class LinearManager {
     return sortedIssues[0];
   }
 
+  // Get "Done" state ID for a specific issue
+  async getDoneStateForIssue(issueId) {
+    try {
+      const issue = await this.getIssueById(issueId);
+      if (!issue || !issue.team) {
+        return null;
+      }
+      
+      const workflowStates = await this.getWorkflowStates(issue.team.id);
+      const doneState = workflowStates.find(state => 
+        state.type === 'completed' || 
+        state.name.toLowerCase() === 'done' ||
+        state.name.toLowerCase() === 'completed'
+      );
+      
+      return doneState;
+    } catch (error) {
+      console.error('Error getting done state for issue:', error);
+      return null;
+    }
+  }
+
+  // Mark task as completed in Linear
+  async markTaskAsCompleted(issueId) {
+    try {
+      const doneState = await this.getDoneStateForIssue(issueId);
+      
+      if (!doneState) {
+        console.warn(`No "Done" state found for issue ${issueId}`);
+        return { success: false, error: 'No "Done" state found' };
+      }
+      
+      const result = await this.updateIssueState(issueId, doneState.id);
+      
+      if (result.success) {
+        console.log(`✅ Task ${issueId} marked as completed in Linear`);
+        return { success: true, newState: doneState.name };
+      } else {
+        console.error(`❌ Failed to update task ${issueId} in Linear`);
+        return { success: false, error: 'Failed to update state' };
+      }
+      
+    } catch (error) {
+      console.error('Error marking task as completed:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
   // Update multiple task states based on real implementation status
   async updateTaskStates(updates) {
     const results = [];
