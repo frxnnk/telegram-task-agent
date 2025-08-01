@@ -20,6 +20,12 @@ const docker = new DockerOrchestrator({
   mockMode: process.env.DOCKER_MOCK_MODE === 'true' // For testing without Docker
 });
 
+// Helper function to escape Markdown special characters
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.replace(/[*_`\[\]()~>#+=|{}.!-]/g, '\\$&');
+}
+
 // Initialize ProjectRepoManager
 const projectRepoManager = new ProjectRepoManager({
   linearManager: linear,
@@ -1620,7 +1626,8 @@ bot.action(/^agent_tasks_(.+)$/, async (ctx) => {
       const isSuggested = suggestedTask && task.id === suggestedTask.id;
       const suggestionIndicator = isSuggested ? '💡 ' : '';
       
-      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${task.identifier}**: ${task.title.slice(0, 45)}${task.title.length > 45 ? '...' : ''}\n`;
+      const shortTitle = task.title.slice(0, 45) + (task.title.length > 45 ? '...' : '');
+      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${escapeMarkdown(task.identifier)}**: ${escapeMarkdown(shortTitle)}\n`;
       tasksMessage += `   Estado: ${task.state.name}`;
       if (task.assignee) {
         tasksMessage += ` • ${task.assignee.name}`;
@@ -1736,7 +1743,8 @@ bot.action(/^agent_all_tasks_(.+)$/, async (ctx) => {
       const suggestionIndicator = isSuggested ? '💡 ' : '';
       const isCompleted = task.state.type === 'completed' || task.state.type === 'canceled';
       
-      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${task.identifier}**: ${task.title.slice(0, 40)}${task.title.length > 40 ? '...' : ''}\n`;
+      const shortTitle = task.title.slice(0, 40) + (task.title.length > 40 ? '...' : '');
+      tasksMessage += `${index + 1}. ${suggestionIndicator}${stateEmoji}${priorityEmoji} **${escapeMarkdown(task.identifier)}**: ${escapeMarkdown(shortTitle)}\n`;
       tasksMessage += `   Estado: ${task.state.name}`;
       if (task.assignee) {
         tasksMessage += ` • ${task.assignee.name}`;
@@ -1901,8 +1909,12 @@ bot.action(/^agent_execute_background_(.+)$/, async (ctx) => {
       const priority = task.priority ? `${getPriorityEmoji(task.priority)} ` : '';
       const shortTitle = task.title.length > 35 ? task.title.substring(0, 35) + '...' : task.title;
       
-      taskMessage += `${priority}**${shortTitle}**\n`;
-      taskMessage += `└ Estado: ${task.state?.name || 'N/A'}\n\n`;
+      // Escape Markdown special characters
+      const escapedTitle = escapeMarkdown(shortTitle);
+      const escapedState = escapeMarkdown(task.state?.name || 'N/A');
+      
+      taskMessage += `${priority}**${escapedTitle}**\n`;
+      taskMessage += `└ Estado: ${escapedState}\n\n`;
       
       buttons.push([
         { text: '▶️ Ejecutar Background', callback_data: `execute_background_${agent.id}_${task.id}` },
