@@ -1886,15 +1886,19 @@ bot.action(/^execute_background_(.+)_(.+)$/, async (ctx) => {
       0
     );
     
-    // Start actual background execution
+    // Start actual background execution with live updates
     try {
-      await startBackgroundTaskExecution(agent, task, execution);
+      await startBackgroundTaskExecution(agent, task, execution, ctx);
     } catch (error) {
       console.error('Failed to start background execution:', error);
       // Update execution as failed
       await agentManager.updateTaskExecution(execution.id, 'failed', 0, error.message);
       await agentManager.updateAgentStatus(agent.id, 'idle', null, null, 0);
-      throw error;
+      
+      await ctx.editMessageText(`❌ *Error ejecutando tarea*\n\n${error.message}`, {
+        parse_mode: 'Markdown'
+      });
+      return;
     }
     
     const successMessage = `✅ *Ejecución Background Iniciada*
@@ -2904,12 +2908,22 @@ bot.action(/^github_structure_(.+)$/, async (ctx) => {
 });
 
 // Task execution functions
-async function startBackgroundTaskExecution(agent, task, execution) {
+async function startBackgroundTaskExecution(agent, task, execution, ctx) {
   console.log(`🚀 Starting background execution for task ${task.id}`);
+  
+  // Send progress update to user
+  await ctx.editMessageText('🔍 *Analizando tarea y repositorios...*', {
+    parse_mode: 'Markdown'
+  });
   
   try {
     // Get project context for the agent
     const projectContext = await projectRepoManager.getProjectContext(agent.linear_project_id);
+    
+    // Update progress
+    await ctx.editMessageText('🚀 *Iniciando contenedor Docker con Claude CLI...*', {
+      parse_mode: 'Markdown'
+    });
     
     // Prepare task data for agent execution
     const taskData = {
@@ -2953,6 +2967,21 @@ Focus on understanding the existing codebase and following established patterns.
     
     console.log(`🤖 Agent container started: ${dockerInstance.instanceId}`);
     
+    // Send container info to user
+    await ctx.editMessageText(`✅ *Contenedor iniciado exitosamente*
+
+🐳 **Container:** ${dockerInstance.containerName}
+🤖 **Claude CLI:** Ejecutándose automáticamente
+📁 **Workspace:** ${dockerInstance.workspace || 'N/A'}
+
+⏳ *El agente está analizando la tarea y ejecutando cambios...*
+💬 Te notificaré cuando termine.`, {
+      parse_mode: 'Markdown'
+    });
+    
+    // Start monitoring the container
+    monitorBackgroundExecution(dockerInstance, agent, task, execution, ctx);
+    
     // Update execution with Docker instance info
     await agentManager.updateTaskExecution(
       execution.id,
@@ -2968,6 +2997,93 @@ Focus on understanding the existing codebase and following established patterns.
     console.error('Failed to start background execution:', error);
     throw error;
   }
+}
+
+async function monitorBackgroundExecution(dockerInstance, agent, task, execution, ctx) {
+  const instanceId = dockerInstance.instanceId;
+  let lastUpdateTime = Date.now();
+  let checkCount = 0;
+  
+  const checkInterval = setInterval(async () => {
+    try {
+      checkCount++;
+      
+      // Check container status every 30 seconds
+      const containerStatus = await docker.getInstanceStatus(instanceId);
+      
+      if (!containerStatus) {
+        clearInterval(checkInterval);
+        return;
+      }
+      
+      // Send periodic updates every few checks (every ~2 minutes)
+      if (checkCount % 4 === 0) {
+        const timeElapsed = Math.floor((Date.now() - lastUpdateTime) / 1000 / 60);
+        
+        await ctx.editMessageText(`🔄 *Agente ejecutándose...*
+
+🐳 **Container:** ${dockerInstance.containerName}
+⏱️ **Tiempo:** ${timeElapsed}+ minutos
+📊 **Estado:** ${containerStatus.status}
+
+⏳ *Claude CLI está trabajando automáticamente...*
+💬 Te notificaré cuando termine.`, {
+          parse_mode: 'Markdown'
+        });
+      }
+      
+      // If container finished (exited)
+      if (containerStatus.status === 'exited' || containerStatus.status === 'completed') {
+        clearInterval(checkInterval);
+        
+        // Get final logs
+        const logs = await docker.getInstanceLogs(instanceId);
+        
+        // Update execution status
+        await agentManager.updateTaskExecution(
+          execution.id, 
+          'completed', 
+          100, 
+          'Background execution completed'
+        );
+        
+        await agentManager.updateAgentStatus(agent.id, 'idle', null, null, 0);
+        
+        // Send completion message
+        await ctx.editMessageText(`🎉 *Tarea completada exitosamente*
+
+✅ **Agente:** ${agent.name}
+📋 **Tarea:** ${task.title}
+⏱️ **Duración:** ${Math.floor((Date.now() - lastUpdateTime) / 1000 / 60)} minutos
+
+🔍 **Resumen de cambios:**
+${logs?.slice(-500) || 'Ver logs completos con /logs command'}
+
+🎯 *El agente ha completado la tarea automáticamente.*`, {
+          parse_mode: 'Markdown'
+        });
+      }
+      
+      // Timeout after 30 minutes
+      if (checkCount > 60) {
+        clearInterval(checkInterval);
+        
+        await ctx.editMessageText(`⚠️ *Timeout: Ejecución muy larga*
+
+🐳 **Container:** ${dockerInstance.containerName}
+⏱️ **Tiempo:** 30+ minutos
+
+🔧 *La tarea sigue ejecutándose en background.*
+📊 Usa /logs ${instanceId} para ver el progreso.`, {
+          parse_mode: 'Markdown'
+        });
+      }
+      
+    } catch (error) {
+      console.error('Error monitoring background execution:', error);
+      // Continue monitoring despite errors
+    }
+  }, 30000); // Check every 30 seconds
 }
 
 async function startInteractiveTaskExecution(agent, task, execution, userPrompt) {

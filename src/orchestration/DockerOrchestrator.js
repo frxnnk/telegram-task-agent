@@ -978,6 +978,63 @@ echo "✅ Agent execution completed successfully"
     
     return execution;
   }
+
+  async getInstanceStatus(instanceId) {
+    try {
+      const instance = this.instances.get(instanceId);
+      if (!instance) {
+        return null;
+      }
+      
+      // Check Docker container status
+      try {
+        const { stdout } = await execAsync(`docker inspect ${instance.containerName} --format='{{.State.Status}}'`);
+        const status = stdout.trim();
+        
+        return {
+          instanceId,
+          containerName: instance.containerName,
+          status: status,
+          startTime: instance.startTime,
+          pid: instance.process?.pid
+        };
+      } catch (error) {
+        // Container might not exist anymore
+        return {
+          instanceId,
+          containerName: instance.containerName,
+          status: 'not_found',
+          startTime: instance.startTime
+        };
+      }
+      
+    } catch (error) {
+      console.error(`Error getting status for instance ${instanceId}:`, error);
+      return null;
+    }
+  }
+
+  async getInstanceLogs(instanceId) {
+    try {
+      const instance = this.instances.get(instanceId);
+      if (!instance) {
+        return 'Instance not found';
+      }
+      
+      // Get Docker container logs
+      try {
+        const { stdout } = await execAsync(`docker logs ${instance.containerName} --tail=100`);
+        return stdout;
+      } catch (error) {
+        console.error(`Error getting logs for ${instanceId}:`, error);
+        return this.logs.get(instanceId) || 'No logs available';
+      }
+      
+    } catch (error) {
+      console.error(`Error getting logs for instance ${instanceId}:`, error);
+      return 'Error retrieving logs';
+    }
+  }
 }
 
 module.exports = DockerOrchestrator;
