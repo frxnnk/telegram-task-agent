@@ -353,9 +353,23 @@ class LinearManager {
       let displayTitle = issue.title;
       let displayIdentifier = issue.identifier;
       
-      if (issue.project && issue.project.name && issue.project.name.toLowerCase().includes('telegram')) {
+      // Check if this is a telegram-related project (by name or identifier pattern)
+      const isTegramProject = (issue.project && issue.project.name && 
+        (issue.project.name.toLowerCase().includes('telegram') || 
+         issue.project.name.toLowerCase().includes('test'))) ||
+        issue.identifier.startsWith('TEL-');
+      
+      if (isTegramProject) {
         displayTitle = displayTitle.replace(/^RELY-\d+:\s*/, '');
-        displayIdentifier = displayIdentifier.replace(/^RELY-/, 'TELEGRAM-');
+        
+        // Replace based on actual identifier pattern
+        if (issue.identifier.startsWith('TEL-')) {
+          // Keep TEL- prefix as is
+          displayIdentifier = issue.identifier;
+        } else if (issue.identifier.startsWith('RELY-')) {
+          // Convert RELY- to TEL- for telegram projects
+          displayIdentifier = issue.identifier.replace(/^RELY-/, 'TEL-');
+        }
       }
       
       const suggestionIndicator = isSuggested ? '💡 ' : '';
