@@ -23,7 +23,13 @@ const docker = new DockerOrchestrator({
 // Helper function to escape Markdown special characters
 function escapeMarkdown(text) {
   if (!text) return '';
-  return text.replace(/[*_`\[\]()~>#+=|{}.!-]/g, '\\$&');
+  return text.replace(/[*_`\[\]()~>#+=|{}.!]/g, '\\$&');
+}
+
+// Helper function to escape text but preserve hyphens (for container names)
+function escapeMarkdownSafe(text) {
+  if (!text) return '';
+  return text.replace(/[*_`\[\]()~>#+=|{}.!]/g, '\\$&');
 }
 
 // Initialize ProjectRepoManager
@@ -3117,11 +3123,12 @@ async function monitorBackgroundExecution(dockerInstance, agent, task, execution
       const timeElapsed = Math.floor((Date.now() - lastUpdateTime) / 1000 / 60);
       
       // Send updates every check (every 10 seconds)
-      const escapedContainerName = escapeMarkdown(dockerInstance.containerName);
-      const escapedStatus = escapeMarkdown(containerStatus.status);
+      const escapedContainerName = escapeMarkdownSafe(dockerInstance.containerName);
+      const escapedStatus = escapeMarkdownSafe(containerStatus.status);
       const escapedLogs = recentLogs.length > 400 ? recentLogs.substring(0, 400) + '...' : recentLogs;
       
-      await ctx.editMessageText(`🔄 *Agente ejecutándose...*
+      try {
+        await ctx.editMessageText(`🔄 *Agente ejecutándose...*
 
 🐳 **Container:** ${escapedContainerName}
 ⏱️ **Tiempo:** ${timeElapsed}+ minutos  
@@ -3133,14 +3140,30 @@ ${escapedLogs}
 \`\`\`
 
 ⏳ *Claude CLI trabajando automáticamente...*`, {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '⏸️ Pausar Agente', callback_data: `pause_agent_${instanceId}` },
-            { text: '📋 Logs Completos', callback_data: `full_logs_${instanceId}` }
-          ]]
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [[
+              { text: '⏸️ Pausar Agente', callback_data: `pause_agent_${instanceId}` },
+              { text: '📋 Logs Completos', callback_data: `full_logs_${instanceId}` }
+            ]]
+          }
+        });
+      } catch (messageError) {
+        console.error('Error updating message during monitoring:', messageError);
+        // If message update fails, try a simpler version
+        try {
+          await ctx.editMessageText(`🔄 *Agente ejecutándose...*
+
+⏱️ **Tiempo:** ${timeElapsed}+ minutos  
+📊 **Estado:** ${containerStatus.status}
+
+⏳ *Trabajando automáticamente...*`, {
+            parse_mode: 'Markdown'
+          });
+        } catch (fallbackError) {
+          console.error('Fallback message update also failed:', fallbackError);
         }
-      });
+      }
       
       // If container finished (exited, completed, or not found - which means it finished and was removed)
       if (containerStatus.status === 'exited' || containerStatus.status === 'completed' || containerStatus.status === 'not_found') {
