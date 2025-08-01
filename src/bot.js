@@ -1906,7 +1906,7 @@ bot.action(/^agent_execute_background_(.+)$/, async (ctx) => {
     const buttons = [];
     
     availableTasks.slice(0, 8).forEach(task => {
-      const priority = task.priority ? `${getPriorityEmoji(task.priority)} ` : '';
+      const priority = task.priority ? `${linear.getPriorityEmoji(task.priority)} ` : '';
       const shortTitle = task.title.length > 35 ? task.title.substring(0, 35) + '...' : task.title;
       
       // Escape Markdown special characters
