@@ -715,29 +715,139 @@ executeTask();
 
     // Crear script de ejecución personalizado si no existe
     const executionScript = taskData.executionScript || `#!/bin/bash
-echo "🤖 Agent Execution Script"
-echo "📋 Task: ${taskData.title}"
-echo "🔍 Analyzing context..."
+echo "🤖 REAL Claude Agent Execution - NO SIMULATION"
+echo "📋 Task: ${taskData.title.replace(/"/g, '\\"')}"
+echo "🔍 Starting real implementation..."
 
-# Verificar autenticación Claude CLI
-if ! claude auth status > /dev/null 2>&1; then
-    echo "❌ Claude CLI not authenticated"
+# Verificar Claude CLI disponibilidad
+if ! command -v claude >/dev/null 2>&1; then
+    echo "❌ Claude CLI not available"
     exit 1
 fi
 
-echo "✅ Claude CLI authenticated"
+echo "✅ Claude CLI ready for real execution"
+
+# Configurar Git para commits
+git config --global user.name "Background Agent" 2>/dev/null || true
+git config --global user.email "agent@telegram-task-agent.com" 2>/dev/null || true
 
 # Leer contexto de la tarea
+TASK_TITLE="Unknown Task"
+TASK_DESCRIPTION="No description available"
 if [ -f "task-context.json" ]; then
-    echo "📄 Task context loaded"
-    cat task-context.json | jq .title 2>/dev/null || echo "Task context available"
+    echo "📄 Loading task context..."
+    TASK_TITLE=$(jq -r '.title // "Unknown Task"' task-context.json 2>/dev/null)
+    TASK_DESCRIPTION=$(jq -r '.description // "No description"' task-context.json 2>/dev/null)
+    echo "📋 Real Task: $TASK_TITLE"
 fi
 
-# Ejecutar análisis con Claude
-echo "🧠 Starting intelligent analysis..."
-echo "Please analyze this Linear task and repository context to create a detailed execution plan" | claude --print
+# Buscar y acceder al repositorio
+REPO_DIR=""
+if [ -d "repositories" ] && [ "$(ls -A repositories 2>/dev/null)" ]; then
+    REPO_DIR=$(find repositories -maxdepth 1 -type d | grep -v "^repositories$" | head -1)
+    if [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR" ]; then
+        echo "📂 Working with repository: $REPO_DIR"
+        cd "$REPO_DIR"
+        
+        # Configurar Git para este repo
+        git config user.name "Background Agent" 2>/dev/null || true
+        git config user.email "agent@telegram-task-agent.com" 2>/dev/null || true
+        
+        echo "📊 Initial repository status:"
+        git status --short 2>/dev/null || echo "  No git repository or empty"
+        
+        echo "📁 Available files:"
+        find . -type f -not -path "./.git/*" | head -20
+    else
+        echo "⚠️ No repository directory found, working in workspace"
+    fi
+else
+    echo "⚠️ No repositories cloned, creating workspace files"
+fi
 
-echo "✅ Agent execution completed successfully"
+# Crear prompt detallado para Claude con instrucciones específicas
+cat > /tmp/claude_prompt.txt << 'EOF'
+You are a background agent tasked with implementing a Linear task. You have FULL autonomy to:
+
+1. Analyze the task requirements
+2. Create, modify, or delete files as needed
+3. Write actual code and content
+4. Run tests and verify functionality
+5. Create meaningful git commits
+
+TASK: ${taskData.title.replace(/"/g, '\\"')}
+
+DESCRIPTION: ${taskData.description ? taskData.description.replace(/"/g, '\\"') : 'No description provided'}
+
+CURRENT DIRECTORY: $(pwd)
+
+AVAILABLE FILES:
+$(find . -type f -not -path "./.git/*" | head -20)
+
+INSTRUCTIONS:
+- This is REAL execution, not simulation
+- Make actual changes to files
+- Follow the task requirements precisely
+- Create working, functional code
+- Ensure good coding practices
+- Test your implementation if possible
+- Create a descriptive git commit when done
+
+Please start implementing this task now. Be specific and make real changes.
+EOF
+
+echo "🧠 Executing REAL Claude analysis and implementation..."
+echo "📝 Sending task to Claude for real implementation..."
+
+# Ejecutar Claude con el prompt
+claude --print < /tmp/claude_prompt.txt
+
+echo "🔍 Checking for real changes made by Claude..."
+
+# Verificar cambios reales
+if [ -n "$REPO_DIR" ] && [ -d "$REPO_DIR" ]; then
+    cd "$REPO_DIR"
+elif [ -d ".git" ]; then
+    echo "📂 Working in current git directory"
+else
+    echo "📂 Initializing git repository"
+    git init . 2>/dev/null || true
+fi
+
+# Mostrar cambios
+CHANGES=$(git status --porcelain 2>/dev/null | wc -l)
+if [ "$CHANGES" -gt 0 ]; then
+    echo "📝 REAL CHANGES DETECTED: $CHANGES files modified"
+    echo "📋 Changed files:"
+    git status --porcelain 2>/dev/null | head -10
+    
+    echo "💾 Creating real commit..."
+    git add . 2>/dev/null
+    COMMIT_MSG="feat: ${taskData.title.replace(/"/g, '\\"')}
+
+Real implementation by Background Agent
+- Task completed with actual file changes
+- Automated execution with Claude AI
+
+$(date): Task execution completed"
+    
+    if git commit -m "$COMMIT_MSG" 2>/dev/null; then
+        echo "✅ REAL COMMIT CREATED SUCCESSFULLY"
+        COMMIT_HASH=$(git rev-parse HEAD 2>/dev/null)
+        echo "🔗 Commit hash: $COMMIT_HASH"
+        
+        echo "📊 Commit details:"
+        git show --stat HEAD 2>/dev/null | head -10
+    else
+        echo "⚠️ Commit creation failed"
+    fi
+else
+    echo "❌ NO REAL CHANGES DETECTED"
+    echo "   This indicates Claude did not make actual file modifications"
+    echo "   Task may need manual intervention or different approach"
+fi
+
+echo "🎉 Real agent execution completed - Check git log for actual changes"
 `;
 
     await fs.promises.writeFile(

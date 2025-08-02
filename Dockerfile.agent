@@ -73,16 +73,12 @@ else
 fi
 
 # Verificar Claude CLI
-echo "🔐 Verificando autenticación Claude CLI..."
+echo "🔐 Verificando Claude CLI..."
 if command -v claude >/dev/null 2>&1; then
     echo "✅ Claude CLI disponible en PATH"
-    if claude auth status >/dev/null 2>&1; then
-        echo "✅ Claude CLI autenticado correctamente"
-        claude auth status
-    else
-        echo "⚠️  Claude CLI no autenticado - verificar montaje de /root/.claude"
-        echo "   Status: $(claude auth status 2>&1 || echo 'Error')"
-    fi
+    echo "📋 Versión: $(claude --version 2>/dev/null || echo 'Error obteniendo versión')"
+    echo "🔍 Diagnóstico del sistema:"
+    claude doctor 2>/dev/null || echo "   ⚠️  Diagnóstico no disponible"
 else
     echo "❌ Claude CLI no disponible en PATH"
     echo "   PATH actual: $PATH"
@@ -132,9 +128,9 @@ echo "🧪 INICIANDO TEST INTEGRAL DEL AGENTE"
 echo "Test 1: Claude CLI disponibilidad"
 which claude && echo "✅ Claude en PATH" || echo "❌ Claude NO en PATH"
 
-# Test 2: Autenticación
-echo "Test 2: Autenticación Claude"
-claude auth status && echo "✅ Autenticado" || echo "❌ No autenticado"
+# Test 2: Diagnóstico Claude
+echo "Test 2: Diagnóstico Claude"
+claude doctor && echo "✅ Sistema OK" || echo "❌ Sistema con problemas"
 
 # Test 3: Funcionalidad básica
 echo "Test 3: Funcionalidad básica"

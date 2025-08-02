@@ -17,7 +17,7 @@ const docker = new DockerOrchestrator({
   workspacePath: process.env.DOCKER_WORKSPACE_PATH || './workspace',
   maxInstances: process.env.MAX_DOCKER_INSTANCES || 10,
   projectRepoManager: null, // Will be set after initialization
-  mockMode: process.env.DOCKER_MOCK_MODE === 'true' // For testing without Docker
+  mockMode: false // DISABLED: Using real Docker execution with Claude CLI
 });
 
 // Helper function to escape Markdown special characters
@@ -3019,7 +3019,28 @@ async function startBackgroundTaskExecution(agent, task, execution, ctx) {
   
   try {
     // Get project context for the agent
-    const projectContext = await projectRepoManager.getProjectContext(agent.linear_project_id);
+    // Get project context with repositories directly from agent
+    const repositories = agent.github_repos ? JSON.parse(agent.github_repos) : [];
+    const projectContext = {
+      linearProjectId: agent.linear_project_id,
+      repositories: repositories.map(repo => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        owner: repo.full_name.split('/')[0],
+        cloneUrl: repo.clone_url,
+        htmlUrl: repo.html_url,
+        sshUrl: repo.ssh_url,
+        description: repo.description,
+        language: repo.language,
+        private: repo.private,
+        defaultBranch: repo.default_branch
+      })),
+      repositoryStructures: {},
+      metadata: {},
+      repositoryCount: repositories.length,
+      hasRepositories: repositories.length > 0
+    };
     
     // Update progress
     await ctx.editMessageText('🚀 *Iniciando contenedor Docker con Claude CLI...*', {
@@ -3620,7 +3641,28 @@ async function startInteractiveTaskExecution(agent, task, execution, userPrompt)
   
   try {
     // Get project context for the agent
-    const projectContext = await projectRepoManager.getProjectContext(agent.linear_project_id);
+    // Get project context with repositories directly from agent
+    const repositories = agent.github_repos ? JSON.parse(agent.github_repos) : [];
+    const projectContext = {
+      linearProjectId: agent.linear_project_id,
+      repositories: repositories.map(repo => ({
+        id: repo.id,
+        name: repo.name,
+        fullName: repo.full_name,
+        owner: repo.full_name.split('/')[0],
+        cloneUrl: repo.clone_url,
+        htmlUrl: repo.html_url,
+        sshUrl: repo.ssh_url,
+        description: repo.description,
+        language: repo.language,
+        private: repo.private,
+        defaultBranch: repo.default_branch
+      })),
+      repositoryStructures: {},
+      metadata: {},
+      repositoryCount: repositories.length,
+      hasRepositories: repositories.length > 0
+    };
     
     // Prepare task data for interactive agent execution
     const taskData = {
