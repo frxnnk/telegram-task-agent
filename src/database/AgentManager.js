@@ -164,7 +164,7 @@ class AgentManager {
           } else {
             const agents = rows.map(row => ({
               ...row,
-              github_repos: JSON.parse(row.github_repos)
+              github_repos: row.github_repos ? (typeof row.github_repos === 'string' ? JSON.parse(row.github_repos) : row.github_repos) : []
             }));
             resolve(agents);
           }
@@ -185,7 +185,7 @@ class AgentManager {
           } else if (row) {
             resolve({
               ...row,
-              github_repos: JSON.parse(row.github_repos)
+              github_repos: row.github_repos ? (typeof row.github_repos === 'string' ? JSON.parse(row.github_repos) : row.github_repos) : []
             });
           } else {
             resolve(null);

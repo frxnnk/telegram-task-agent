@@ -3018,9 +3018,17 @@ async function startBackgroundTaskExecution(agent, task, execution, ctx) {
   });
   
   try {
-    // Get project context for the agent
-    // Get project context with repositories directly from agent
-    const repositories = agent.github_repos ? JSON.parse(agent.github_repos) : [];
+    // Debug agent data
+    console.log('🔍 Agent debug:', {
+      id: agent.id,
+      name: agent.name,
+      github_repos_type: typeof agent.github_repos,
+      github_repos_length: agent.github_repos ? agent.github_repos.length : 0,
+      github_repos_preview: agent.github_repos ? agent.github_repos.substring(0, 100) : 'null'
+    });
+    
+    // Get repositories from agent (already parsed by AgentManager)
+    const repositories = Array.isArray(agent.github_repos) ? agent.github_repos : [];
     const projectContext = {
       linearProjectId: agent.linear_project_id,
       repositories: repositories.map(repo => ({
@@ -3642,7 +3650,8 @@ async function startInteractiveTaskExecution(agent, task, execution, userPrompt)
   try {
     // Get project context for the agent
     // Get project context with repositories directly from agent
-    const repositories = agent.github_repos ? JSON.parse(agent.github_repos) : [];
+    // Get repositories from agent (already parsed by AgentManager)
+    const repositories = Array.isArray(agent.github_repos) ? agent.github_repos : [];
     const projectContext = {
       linearProjectId: agent.linear_project_id,
       repositories: repositories.map(repo => ({
@@ -3780,7 +3789,7 @@ async function monitorTaskExecution(dockerInstanceId, executionId, agentId, line
               // Get repository paths from agent context
               const agent = await agentManager.getAgent(agentId);
               const repositoryPaths = agent.github_repos ? 
-                JSON.parse(agent.github_repos).map(repo => repo.full_name) : [];
+                (Array.isArray(agent.github_repos) ? agent.github_repos : []).map(repo => repo.full_name) : [];
               
               executionResults = await docker.analyzeExecutionChanges(latestWorkspace, repositoryPaths);
             }
