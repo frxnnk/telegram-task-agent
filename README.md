@@ -1,121 +1,164 @@
-# Telegram Task Agent
+# 🤖 Telegram Task Agent - Direct Chat
 
-Sistema de agentes atomizados que descompone proyectos complejos en tareas ejecutables por Docker containers independientes. Control total via Telegram con monitoreo en tiempo real y cálculo preciso de costos por token.
+Bot de Telegram que permite chatear directamente con Claude CLI y acceder a herramientas de desarrollo (Linear, GitHub) desde tu móvil.
 
-## 🎯 Features del MVP
+## ✨ Características
 
-- ✅ **Task Atomization**: IA que descompone proyectos complejos
-- ✅ **Docker Isolation**: Cada tarea ejecuta en contenedor independiente  
-- ✅ **Real-time Monitoring**: Updates automáticos cada 30s via Telegram
-- ✅ **Cost Tracking**: Cálculo preciso de tokens y costos por tarea
-- ✅ **Dependency Management**: Orden de ejecución basado en dependencias
-- ✅ **Rollback System**: Revertir tareas fallidas automáticamente
+- **💬 Chat Directo con Claude CLI**: Envía cualquier mensaje y obtén respuestas de Claude en tiempo real
+- **📋 Integración Linear**: Consulta equipos, proyectos y tareas
+- **🐙 Integración GitHub**: Ve repositorios y información del perfil
+- **⚡ Simple y Rápido**: Sin complejidad, solo chat directo
+- **📱 Móvil First**: Diseñado para uso desde Telegram móvil
 
 ## 🚀 Quick Start
 
-### 1. Configurar variables de entorno
+### 1. Configuración
 ```bash
-cp .env.example .env
-# Editar .env con tu TELEGRAM_BOT_TOKEN
-```
+# Clonar proyecto
+git clone https://github.com/frxnnk/telegram-task-agent.git
+cd telegram-task-agent
 
-### 2. Instalar dependencias
-```bash
+# Instalar dependencias
 npm install
+
+# Configurar variables de entorno
+cp .env.example .env
+# Editar .env con tus tokens
 ```
 
-### 3. Ejecutar en desarrollo
+### 2. Variables de Entorno (.env)
+```env
+# Bot de Telegram (obligatorio)
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+
+# Linear API (opcional)
+LINEAR_API_KEY=your_linear_api_key
+
+# GitHub Token (opcional)
+GITHUB_TOKEN=your_github_token
+```
+
+### 3. Ejecutar
 ```bash
+# Desarrollo
 npm run dev
+
+# Producción
+npm start
 ```
 
-### 4. O ejecutar con Docker
-```bash
-docker-compose up --build
-```
+## 📱 Uso
 
-## 📱 Comandos del Bot
+### Chat Directo
+Simplemente envía cualquier mensaje al bot:
 
 ```
-/start - Inicializar bot
-/project "descripción completa del proyecto" - Atomizar proyecto
-/status - Ver estado del proyecto actual
-/start_execution - Iniciar ejecución de tareas atomizadas
-/progress - Ver progreso detallado con todas las tareas
-/pause - Pausar ejecución del proyecto
-/resume - Reanudar ejecución
-/stop - Detener proyecto actual y limpiar recursos
+"¿Cómo implementar autenticación JWT en Node.js?"
+"Revisa este código y sugiere mejoras: [tu código]"
+"Explícame los hooks de React con ejemplos"
 ```
 
-## 🏗️ Arquitectura LangGraph
+### Comandos Disponibles
+- `/start` - Mensaje de bienvenida
+- `/help` - Ayuda completa
+- `/status` - Estado del sistema
+- `/linear` - Resumen de Linear
+- `/linear_teams` - Equipos de Linear
+- `/linear_projects` - Proyectos de Linear
+- `/github` - Resumen de GitHub
+- `/github_repos` - Repositorios de GitHub
 
-```
-Telegram Input → LangGraph Workflow → Docker Agents
-       ↓              ↓                    ↓
-   [Atomizer] → [Validator] → [Executor] → [Monitor]
-       ↓              ↓                    ↓
-   Claude API → TaskState → Docker Containers
-```
-
-### Workflow Nodes:
-- **Atomizer**: Claude descompone proyecto en tareas atómicas
-- **Validator**: Verifica dependencias y consistencia  
-- **Executor**: Crea y ejecuta contenedores Docker
-- **Monitor**: Supervisa progreso y maneja fallos
-- **Finalizer**: Limpia recursos y reporta resultados
-
-## 📁 Estructura
+## 🏗️ Arquitectura
 
 ```
 telegram-task-agent/
 ├── src/
-│   ├── bot.js                    # Bot principal refactorizado
-│   ├── workflows/
-│   │   └── TaskWorkflow.js       # LangGraph workflow definition
-│   ├── state/
-│   │   └── TaskState.js          # State management class
-│   └── agents/                   # (Futuro) Agentes especializados
-├── workspace/                    # Volumen compartido con containers
-├── data/                        # SQLite database
-├── docker-compose.yml           # Setup completo
-└── Dockerfile                  # Imagen del bot
+│   ├── bot.js                 # Bot principal con chat directo
+│   ├── integrations/
+│   │   ├── LinearManager.js   # API de Linear
+│   │   └── GitHubManager.js   # API de GitHub
+│   └── database/              # (legacy, no usado)
+├── .env                       # Variables de entorno
+├── package.json              # Dependencias
+└── README.md                  # Esta documentación
 ```
 
-## 🔄 Flujo de Ejecución
+## 🔧 Tecnologías
 
-1. Usuario envía `/project "Crear API REST con autenticación"`
-2. **Atomizer**: Claude descompone en tareas atómicas con dependencias
-3. **Validator**: Verifica consistencia y dependencias
-4. Usuario revisa tareas y ejecuta `/start_execution`
-5. **Executor**: Crea contenedores Docker por tarea según dependencias
-6. **Monitor**: Supervisa progreso, maneja fallos, actualiza estado
-7. **Finalizer**: Limpia recursos y reporta resultados finales
-8. Telegram recibe updates en tiempo real durante todo el proceso
+- **Node.js** - Runtime
+- **Telegraf** - Framework de Telegram
+- **Claude CLI** - IA conversacional
+- **Linear API** - Gestión de proyectos
+- **GitHub API** - Repositorios
 
-## 🐛 Debug
+## 📋 Requisitos
 
+- Node.js >= 18.0.0
+- Claude CLI instalado y autenticado
+- Bot de Telegram creado (@BotFather)
+- Tokens de Linear y GitHub (opcionales)
+
+## 🚀 Deploy
+
+### Local
 ```bash
-# Ver logs del bot
-docker-compose logs telegram-bot
-
-# Ver contenedores activos
-docker ps
-
-# Limpiar contenedores huérfanos
-docker container prune
+npm start
 ```
 
-## 📝 Desarrollo
+### VPS/Servidor
+```bash
+# Con PM2
+npm install -g pm2
+pm2 start src/bot.js --name telegram-task-agent
+pm2 save
+pm2 startup
+```
 
-Este proyecto está integrado con Linear para tracking de tareas:
-- [📋 Linear Project](https://linear.app/rely-llc/project/telegram-task-agent-mvp-c086d93aa219)
-- Usa format `RELY-XX: description` en commits para auto-linking
-- Branches: `git checkout -b RELY-XX/task-description`
+## 🔒 Seguridad
 
-## 🚢 Deploy
+- Las conversaciones son directas entre tú y Claude CLI
+- No se almacenan mensajes ni datos sensibles
+- Los tokens se manejan vía variables de entorno
+- Acceso limitado a APIs mediante tokens personales
 
-Configurado para Railway/Render con deploy automático desde main branch.
+## 📝 Ejemplos de Uso
 
----
+### Desarrollo
+```
+"¿Cómo estructurar una API REST en Express?"
+"Optimiza esta función JavaScript para mejor performance"
+"Explica la diferencia entre Promise y async/await"
+```
 
-🤖 Generated with [Claude Code](https://claude.ai/code)
+### Linear/GitHub
+```
+/linear_teams
+/github_repos
+/status
+```
+
+### Análisis de Código
+```
+"Revisa este componente React:
+[pegar código]
+
+¿Qué mejoras sugieres?"
+```
+
+## 🤝 Contribuir
+
+1. Fork el proyecto
+2. Crea una branch (`git checkout -b feature/nueva-funcionalidad`)
+3. Commit tus cambios (`git commit -m 'Agrega nueva funcionalidad'`)
+4. Push a la branch (`git push origin feature/nueva-funcionalidad`)
+5. Abre un Pull Request
+
+## 📄 Licencia
+
+MIT - Ve [LICENSE](LICENSE) para más detalles.
+
+## 🆘 Soporte
+
+- 📧 Email: frxnco@protonmail.com
+- 🐛 Issues: [GitHub Issues](https://github.com/frxnnk/telegram-task-agent/issues)
+- 📖 Docs: [README.md](README.md)
